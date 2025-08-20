@@ -1,218 +1,373 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BrandNewKit - Innovative Products for Balkan Homes</title>
-  <meta name="description" content="Discover innovative products designed for Balkan homes. Quality solutions at great prices.">
-  
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BrandNewKit - Innovative Products for Balkan Homes</title>
+    <meta name="description" content="Discover innovative products designed specifically for Balkan homes. Quality solutions that solve real problems at great prices." />
     
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      min-height: 100vh;
-    }
+    <meta property="og:title" content="BrandNewKit - Innovative Products for Balkan Homes" />
+    <meta property="og:description" content="Discover innovative products designed specifically for Balkan homes." />
+    <meta property="og:type" content="website" />
     
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 20px;
-    }
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     
-    header {
-      text-align: center;
-      padding: 40px 20px;
-      background: rgba(255, 255, 255, 0.95);
-      border-radius: 20px;
-      margin-bottom: 40px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-    }
-    
-    h1 {
-      font-size: 2.5em;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      margin-bottom: 10px;
-    }
-    
-    .tagline {
-      font-size: 1.2em;
-      color: #666;
-    }
-    
-    .products-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 30px;
-      margin-top: 40px;
-    }
-    
-    .product-card {
-      background: white;
-      border-radius: 15px;
-      overflow: hidden;
-      box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-      transition: transform 0.3s ease, box-shadow 0.3s ease;
-    }
-    
-    .product-card:hover {
-      transform: translateY(-5px);
-      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-    }
-    
-    .product-link {
-      text-decoration: none;
-      color: inherit;
-      display: block;
-    }
-    
-    .product-image {
-      width: 100%;
-      height: 200px;
-      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-    }
-    
-    .product-image img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-    
-    .placeholder-image {
-      font-size: 60px;
-      opacity: 0.5;
-    }
-    
-    .product-info {
-      padding: 20px;
-    }
-    
-    .product-info h3 {
-      font-size: 1.3em;
-      margin-bottom: 10px;
-      color: #333;
-    }
-    
-    .price {
-      font-size: 1.5em;
-      color: #667eea;
-      font-weight: bold;
-      margin-bottom: 10px;
-    }
-    
-    .description {
-      color: #666;
-      font-size: 0.95em;
-      line-height: 1.5;
-      margin-bottom: 15px;
-      display: -webkit-box;
-      -webkit-line-clamp: 3;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-    
-    .cta {
-      display: inline-block;
-      color: #764ba2;
-      font-weight: 600;
-      transition: transform 0.2s ease;
-    }
-    
-    .product-card:hover .cta {
-      transform: translateX(5px);
-    }
-    
-    footer {
-      text-align: center;
-      padding: 40px 20px;
-      color: white;
-      margin-top: 60px;
-    }
-    
-    @media (max-width: 768px) {
-      h1 {
-        font-size: 2em;
+    <style>
+      :root {
+        --bg: #0b0e14;
+        --surface: #0f1320;
+        --surface-2: #141a2a;
+        --text: #e8eef9;
+        --muted: #9fb0d0;
+        --primary: #6dd3fb;
+        --primary-600: #46c2f5;
+        --accent: #b3ff8f;
+        --warn: #ffb454;
+        --shadow: 0 10px 30px rgba(0,0,0,0.4);
+        --radius: 14px;
+        --radius-lg: 18px;
+        --container: 1120px;
       }
-      
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, sans-serif;
+        color: var(--text);
+        background: radial-gradient(1200px 600px at 80% -10%, rgba(109,211,251,0.14), transparent 60%),
+                    radial-gradient(1000px 600px at 0% -20%, rgba(179,255,143,0.12), transparent 60%),
+                    var(--bg);
+        line-height: 1.6;
+      }
+
+      .container {
+        width: 100%;
+        max-width: var(--container);
+        margin: 0 auto;
+        padding: 0 20px;
+      }
+
+      /* Header */
+      .site-header { 
+        position: sticky; 
+        top: 0; 
+        z-index: 50; 
+        backdrop-filter: saturate(140%) blur(8px); 
+        background: rgba(11,14,20,0.5); 
+        border-bottom: 1px solid rgba(255,255,255,0.06); 
+      }
+      .header-inner { 
+        display: flex; 
+        align-items: center; 
+        justify-content: space-between; 
+        padding: 14px 0; 
+      }
+      .brand { 
+        display: inline-flex; 
+        align-items: center; 
+        gap: 10px; 
+        color: var(--text); 
+        text-decoration: none; 
+        font-weight: 700; 
+        letter-spacing: 0.2px; 
+      }
+      .brand-mark { 
+        font-size: 24px;
+        filter: drop-shadow(0 4px 8px rgba(109,211,251,0.35)); 
+      }
+      .brand-name { font-size: 20px; }
+      .nav { display: flex; align-items: center; gap: 18px; }
+      .nav a { color: var(--muted); text-decoration: none; font-weight: 500; transition: color 0.2s; }
+      .nav a:hover { color: var(--text); }
+
+      /* Hero */
+      .hero { 
+        position: relative; 
+        padding: 80px 0 40px; 
+        overflow: hidden; 
+        text-align: center;
+      }
+      .hero h1 { 
+        font-size: 48px; 
+        line-height: 1.1; 
+        margin: 0 0 16px; 
+        letter-spacing: -0.5px; 
+        background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .lead { 
+        font-size: 20px; 
+        color: var(--muted); 
+        margin: 0 auto 32px;
+        max-width: 600px;
+      }
+      .hero-stats {
+        display: flex;
+        justify-content: center;
+        gap: 48px;
+        margin-top: 48px;
+        flex-wrap: wrap;
+      }
+      .stat {
+        text-align: center;
+      }
+      .stat-number {
+        font-size: 32px;
+        font-weight: 800;
+        color: var(--accent);
+      }
+      .stat-label {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      /* Products Grid */
+      .products {
+        padding: 60px 0;
+      }
+      .products h2 {
+        text-align: center;
+        font-size: 32px;
+        margin: 0 0 48px;
+        letter-spacing: -0.2px;
+      }
       .products-grid {
-        grid-template-columns: 1fr;
-        gap: 20px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 24px;
       }
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <header>
-      <h1>🚀 BrandNewKit</h1>
-      <p class="tagline">Innovative Products for Balkan Homes</p>
-    </header>
-    
-    <main>
-      <div class="products-grid">
-        
-    <div class="product-card">
-      <a href="/products/product-1755702339493-1/index.html" class="product-link">
-        <div class="product-image">
-          <div class="placeholder-image">📦</div>
-        </div>
-        <div class="product-info">
-          <h3></h3>
-          <p class="price"></p>
-          <p class="description"></p>
-          <span class="cta">View Details →</span>
-        </div>
-      </a>
-    </div>
-  
-    <div class="product-card">
-      <a href="/products/product-1755702339494-2/index.html" class="product-link">
-        <div class="product-image">
-          <div class="placeholder-image">📦</div>
-        </div>
-        <div class="product-info">
-          <h3></h3>
-          <p class="price"></p>
-          <p class="description"></p>
-          <span class="cta">View Details →</span>
-        </div>
-      </a>
-    </div>
-  
-    <div class="product-card">
-      <a href="/products/product-1755702339495-3/index.html" class="product-link">
-        <div class="product-image">
-          <div class="placeholder-image">📦</div>
-        </div>
-        <div class="product-info">
-          <h3></h3>
-          <p class="price"></p>
-          <p class="description"></p>
-          <span class="cta">View Details →</span>
-        </div>
-      </a>
-    </div>
-  
+      .product-card {
+        background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: var(--radius-lg);
+        padding: 24px;
+        box-shadow: var(--shadow);
+        transition: transform 0.2s, box-shadow 0.2s;
+      }
+      .product-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+        border-color: rgba(109,211,251,0.3);
+      }
+      .product-link {
+        text-decoration: none;
+        color: inherit;
+        display: block;
+      }
+      .product-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+        filter: drop-shadow(0 4px 8px rgba(109,211,251,0.35));
+      }
+      .product-card h3 {
+        font-size: 20px;
+        margin: 0 0 8px;
+        color: var(--text);
+      }
+      .price {
+        font-size: 24px;
+        font-weight: 800;
+        color: var(--primary);
+        margin: 0 0 12px;
+      }
+      .description {
+        color: var(--muted);
+        margin: 0 0 12px;
+        line-height: 1.5;
+      }
+      .target {
+        color: var(--muted);
+        font-size: 14px;
+        margin: 0 0 16px;
+        opacity: 0.8;
+      }
+      .cta-link {
+        display: inline-flex;
+        align-items: center;
+        color: var(--accent);
+        font-weight: 600;
+        transition: transform 0.2s;
+      }
+      .product-card:hover .cta-link {
+        transform: translateX(4px);
+      }
+
+      /* CTA Section */
+      .cta-section {
+        padding: 80px 0;
+        text-align: center;
+      }
+      .cta-box {
+        background: linear-gradient(180deg, rgba(179,255,143,0.1), rgba(109,211,251,0.06));
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: var(--radius-lg);
+        padding: 48px;
+        box-shadow: var(--shadow);
+        max-width: 600px;
+        margin: 0 auto;
+      }
+      .cta-box h2 {
+        font-size: 32px;
+        margin: 0 0 16px;
+      }
+      .cta-box p {
+        color: var(--muted);
+        margin: 0 0 24px;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 14px 24px;
+        border-radius: 12px;
+        background: linear-gradient(180deg, var(--primary), var(--primary-600));
+        color: #05131a;
+        font-weight: 700;
+        text-decoration: none;
+        box-shadow: var(--shadow);
+        transition: transform 0.2s, filter 0.2s;
+      }
+      .btn:hover {
+        filter: brightness(1.1);
+        transform: translateY(-2px);
+      }
+
+      /* Footer */
+      .site-footer {
+        border-top: 1px solid rgba(255,255,255,0.06);
+        padding: 32px 0;
+        text-align: center;
+        color: var(--muted);
+      }
+      .footer-links {
+        display: flex;
+        justify-content: center;
+        gap: 24px;
+        margin-bottom: 16px;
+      }
+      .footer-links a {
+        color: var(--muted);
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+      .footer-links a:hover {
+        color: var(--text);
+      }
+
+      /* Responsive */
+      @media (max-width: 768px) {
+        .hero h1 { font-size: 36px; }
+        .lead { font-size: 18px; }
+        .products-grid { grid-template-columns: 1fr; }
+        .hero-stats { gap: 24px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true">🚀</span>
+          <span class="brand-name">BrandNewKit</span>
+        </a>
+        <nav class="nav" aria-label="Primary">
+          <a href="#products">Products</a>
+          <a href="#about">About</a>
+          <a href="#contact">Contact</a>
+        </nav>
       </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="container">
+          <h1>Innovative Products for Balkan Homes</h1>
+          <p class="lead">Discover smart solutions designed specifically for our region. Quality products that solve real problems at prices that make sense.</p>
+          
+          <div class="hero-stats">
+            <div class="stat">
+              <div class="stat-number">3</div>
+              <div class="stat-label">Products</div>
+            </div>
+            <div class="stat">
+              <div class="stat-number">€49+</div>
+              <div class="stat-label">Starting from</div>
+            </div>
+            <div class="stat">
+              <div class="stat-number">MK 🇲🇰</div>
+              <div class="stat-label">Made for Balkans</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="products" class="products">
+        <div class="container">
+          <h2>Featured Products</h2>
+          <div class="products-grid">
+
+            <article class="product-card">
+              <a href="/products/product-1755702339493-1/index.html" class="product-link">
+                <div class="product-icon">🧲</div>
+                <h3>ThermoMag Window Insulation Panels</h3>
+                <p class="price">€49–€89 per window kit (various sizes)</p>
+                <p class="description">ThermoMag Window Insulation Panels - The perfect solution for Renters and homeowners in older apartments/houses with drafty single-glazed windows</p>
+                <p class="target">For: Renters and homeowners in older apartments/houses with drafty single-glazed windows</p>
+                <span class="cta-link">View Product →</span>
+              </a>
+            </article>
+
+            <article class="product-card">
+              <a href="/products/product-1755702339494-2/index.html" class="product-link">
+                <div class="product-icon">🧺</div>
+                <h3>BalkoDry Privacy &amp; Drying System</h3>
+                <p class="price">€39–€79 per set</p>
+                <p class="description">BalkoDry Privacy &amp; Drying System - The perfect solution for Apartment dwellers with small balconies/lođas—students, families, and shared households</p>
+                <p class="target">For: Apartment dwellers with small balconies/lođas—students, families, and shared households</p>
+                <span class="cta-link">View Product →</span>
+              </a>
+            </article>
+
+            <article class="product-card">
+              <a href="/products/product-1755702339495-3/index.html" class="product-link">
+                <div class="product-icon">🏺</div>
+                <h3>BalkanPantry Stack (Modular Preserving Jar System)</h3>
+                <p class="price">€29–€59 per starter set (6–12 jars accessories)</p>
+                <p class="description">BalkanPantry Stack (Modular Preserving Jar System) - The perfect solution for Home cooks and small producers making ajvar, turšija, slatko; urban families storing jars in small spaces</p>
+                <p class="target">For: Home cooks and small producers making ajvar, turšija, slatko; urban families storing jars in small spaces</p>
+                <span class="cta-link">View Product →</span>
+              </a>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="about" class="cta-section">
+        <div class="container">
+          <div class="cta-box">
+            <h2>Built for Our Region</h2>
+            <p>Every product is carefully selected to address the unique needs of Balkan households - from energy efficiency to space-saving solutions.</p>
+            <a href="#products" class="btn">Explore Products</a>
+          </div>
+        </div>
+      </section>
     </main>
-    
-    <footer>
-      <p>&copy; 2025 BrandNewKit. All rights reserved.</p>
-      <p>Last updated: 2025-08-20</p>
+
+    <footer class="site-footer">
+      <div class="container">
+        <div class="footer-links">
+          <a href="#products">Products</a>
+          <a href="#about">About</a>
+          <a href="mailto:hello@brandnewkit.com">Contact</a>
+        </div>
+        <p>&copy; 2025 BrandNewKit. All rights reserved.</p>
+        <p style="font-size: 12px; opacity: 0.6;">Last updated: 2025-08-20</p>
+      </div>
     </footer>
-  </div>
-</body>
+  </body>
 </html>
