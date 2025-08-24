@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jarvis - AI Voice Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        'cyber-blue': '#00d4ff',
+                        'cyber-purple': '#7c3aed',
+                        'dark-bg': '#0a0a0f',
+                        'dark-card': '#1a1a2e',
+                        'dark-border': '#2d2d44'
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'fade-in': 'fadeIn 0.3s ease-in-out',
+                        'slide-up': 'slideUp 0.3s ease-out',
+                        'listening': 'listening 1.5s ease-in-out infinite'
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' }
+                        },
+                        slideUp: {
+                            '0%': { transform: 'translateY(20px)', opacity: '0' },
+                            '100%': { transform: 'translateY(0)', opacity: '1' }
+                        },
+                        listening: {
+                            '0%, 100%': { transform: 'scale(1)', boxShadow: '0 0 20px rgba(0, 212, 255, 0.3)' },
+                            '50%': { transform: 'scale(1.05)', boxShadow: '0 0 30px rgba(0, 212, 255, 0.6)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom scrollbar */
+        .chat-container::-webkit-scrollbar {
+            width: 4px;
+        }
+        .chat-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .chat-container::-webkit-scrollbar-thumb {
+            background: rgba(0, 212, 255, 0.3);
+            border-radius: 2px;
+        }
+        .chat-container::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 212, 255, 0.5);
+        }
+    </style>
+</head>
+<body class="bg-dark-bg text-white min-h-screen font-sans">
+    <div class="flex flex-col h-screen max-w-4xl mx-auto">
+        <!-- Header -->
+        <header class="flex items-center justify-between p-6 border-b border-dark-border bg-dark-card/50 backdrop-blur-sm">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-r from-cyber-blue to-cyber-purple flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clip-rule="evenodd"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold bg-gradient-to-r from-cyber-blue to-cyber-purple bg-clip-text text-transparent">
+                        Jarvis
+                    </h1>
+                    <p class="text-sm text-gray-400">AI Voice Assistant</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-2">
+                <div id="status-indicator" class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></div>
+                <span id="status-text" class="text-sm text-gray-400">Ready</span>
+            </div>
+        </header>
+
+        <!-- Chat Area -->
+        <div class="flex-1 overflow-hidden">
+            <div id="chat-container" class="chat-container h-full overflow-y-auto p-6 space-y-4">
+                <!-- Welcome Message -->
+                <div class="animate-fade-in">
+                    <div class="flex items-start space-x-3">
+                        <div class="w-8 h-8 rounded-full bg-gradient-to-r from-cyber-blue to-cyber-purple flex items-center justify-center flex-shrink-0">
+                            <span class="text-xs font-bold">J</span>
+                        </div>
+                        <div class="bg-dark-card rounded-lg rounded-tl-none p-4 max-w-md">
+                            <p class="text-gray-200">Hello! I'm Jarvis, your AI voice assistant. I support two modes:</p>
+                            <div class="mt-2 text-sm text-gray-300">
+                                <p><strong>• Webhook Mode:</strong> Voice-to-text transcription sent to your custom endpoint</p>
+                                <p><strong>• ElevenLabs ConvAI:</strong> Direct AI conversation with premium voice quality</p>
+                            </div>
+                            <p class="text-gray-200 mt-2">Configure your preferred mode using the settings icon, then click the microphone to start!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="p-6 border-t border-dark-border bg-dark-card/30 backdrop-blur-sm">
+            <div class="flex items-center justify-center space-x-4">
+                <!-- Microphone Button -->
+                <button 
+                    id="mic-button" 
+                    class="w-16 h-16 rounded-full bg-gradient-to-r from-cyber-blue to-cyber-purple hover:from-cyber-purple hover:to-cyber-blue transition-all duration-300 flex items-center justify-center shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95"
+                >
+                    <svg id="mic-icon" class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clip-rule="evenodd"></path>
+                    </svg>
+                </button>
+                
+                <!-- Configuration Button -->
+                <button 
+                    id="config-button" 
+                    class="w-12 h-12 rounded-full bg-dark-card border border-dark-border hover:border-cyber-blue transition-all duration-300 flex items-center justify-center"
+                    title="Configuration"
+                >
+                    <svg class="w-5 h-5 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"></path>
+                    </svg>
+                </button>
+            </div>
+            
+            <!-- Listening Indicator -->
+            <div id="listening-indicator" class="hidden mt-4 flex items-center justify-center space-x-2">
+                <div class="w-2 h-2 bg-cyber-blue rounded-full animate-bounce"></div>
+                <div class="w-2 h-2 bg-cyber-blue rounded-full animate-bounce" style="animation-delay: 0.1s"></div>
+                <div class="w-2 h-2 bg-cyber-blue rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
+                <span class="text-sm text-gray-400 ml-2">Listening...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuration Modal -->
+    <div id="config-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-dark-card rounded-lg p-6 max-w-md w-full mx-4 border border-dark-border">
+            <h3 class="text-lg font-bold text-white mb-4">Configuration</h3>
+            <div class="space-y-4">
+                <!-- Mode Selection -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-3">Assistant Mode</label>
+                    <div class="flex space-x-4">
+                        <label class="flex items-center space-x-2 cursor-pointer">
+                            <input type="radio" name="assistant-mode" value="webhook" id="mode-webhook" class="text-cyber-blue">
+                            <span class="text-sm text-gray-300">Webhook Mode</span>
+                        </label>
+                        <label class="flex items-center space-x-2 cursor-pointer">
+                            <input type="radio" name="assistant-mode" value="convai" id="mode-convai" class="text-cyber-blue">
+                            <span class="text-sm text-gray-300">ElevenLabs ConvAI</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Webhook Configuration -->
+                <div id="webhook-config" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-2">Webhook URL</label>
+                        <input 
+                            type="url" 
+                            id="webhook-url" 
+                            class="w-full px-3 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-cyber-blue"
+                            placeholder="https://your-webhook-url.com/endpoint"
+                            value="https://webhook.site/your-unique-url"
+                        >
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <input type="checkbox" id="enable-tts" class="rounded">
+                        <label for="enable-tts" class="text-sm text-gray-300">Enable Text-to-Speech</label>
+                    </div>
+                </div>
+
+                <!-- ConvAI Configuration -->
+                <div id="convai-config" class="space-y-4 hidden">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-2">ConvAI Agent ID</label>
+                        <input 
+                            type="text" 
+                            id="convai-agent-id" 
+                            class="w-full px-3 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-cyber-blue"
+                            placeholder="agent_2901k3evtsjjftzasdcjqzv75q01"
+                            value="agent_2901k3evtsjjftzasdcjqzv75q01"
+                        >
+                    </div>
+                    <div class="p-3 bg-dark-bg rounded-lg border border-dark-border">
+                        <p class="text-xs text-gray-400">
+                            <strong>ConvAI Mode:</strong> Uses ElevenLabs' advanced voice AI with natural conversation flow. 
+                            The widget will appear in the bottom-right corner when activated.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end space-x-3 mt-6">
+                <button 
+                    id="cancel-config" 
+                    class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                >
+                    Cancel
+                </button>
+                <button 
+                    id="save-config" 
+                    class="px-4 py-2 bg-gradient-to-r from-cyber-blue to-cyber-purple text-white rounded-lg hover:from-cyber-purple hover:to-cyber-blue transition-all"
+                >
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class JarvisInterface {
+            constructor() {
+                this.isListening = false;
+                this.recognition = null;
+                this.webhookUrl = localStorage.getItem('jarvis-webhook-url') || 'https://webhook.site/your-unique-url';
+                this.enableTTS = localStorage.getItem('jarvis-enable-tts') === 'true';
+                this.assistantMode = localStorage.getItem('jarvis-assistant-mode') || 'webhook';
+                this.convaiAgentId = localStorage.getItem('jarvis-convai-agent-id') || 'agent_2901k3evtsjjftzasdcjqzv75q01';
+                this.convaiWidget = null;
+                
+                this.initElements();
+                this.initSpeechRecognition();
+                this.bindEvents();
+                this.loadConfiguration();
+                this.initConvAI();
+            }
+
+            initElements() {
+                this.micButton = document.getElementById('mic-button');
+                this.micIcon = document.getElementById('mic-icon');
+                this.chatContainer = document.getElementById('chat-container');
+                this.listeningIndicator = document.getElementById('listening-indicator');
+                this.statusIndicator = document.getElementById('status-indicator');
+                this.statusText = document.getElementById('status-text');
+                this.configButton = document.getElementById('config-button');
+                this.configModal = document.getElementById('config-modal');
+                this.webhookUrlInput = document.getElementById('webhook-url');
+                this.enableTTSCheckbox = document.getElementById('enable-tts');
+                this.modeWebhookRadio = document.getElementById('mode-webhook');
+                this.modeConvaiRadio = document.getElementById('mode-convai');
+                this.webhookConfig = document.getElementById('webhook-config');
+                this.convaiConfig = document.getElementById('convai-config');
+                this.convaiAgentIdInput = document.getElementById('convai-agent-id');
+            }
+
+            initSpeechRecognition() {
+                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                    const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
+                    this.recognition = new SpeechRecognition();
+                    this.recognition.continuous = false;
+                    this.recognition.interimResults = false;
+                    this.recognition.lang = 'en-US';
+
+                    this.recognition.onstart = () => {
+                        this.setListening(true);
+                        this.setStatus('Listening...', 'listening');
+                    };
+
+                    this.recognition.onresult = (event) => {
+                        const transcript = event.results[0][0].transcript;
+                        this.handleSpeechResult(transcript);
+                    };
+
+                    this.recognition.onerror = (event) => {
+                        console.error('Speech recognition error:', event.error);
+                        this.setStatus('Speech recognition error', 'error');
+                        this.setListening(false);
+                    };
+
+                    this.recognition.onend = () => {
+                        this.setListening(false);
+                        this.setStatus('Ready', 'ready');
+                    };
+                } else {
+                    this.setStatus('Speech recognition not supported', 'error');
+                    console.error('Speech recognition not supported in this browser');
+                }
+            }
+
+            bindEvents() {
+                this.micButton.addEventListener('click', () => this.toggleListening());
+                this.configButton.addEventListener('click', () => this.showConfigModal());
+                
+                // Configuration modal events
+                document.getElementById('cancel-config').addEventListener('click', () => this.hideConfigModal());
+                document.getElementById('save-config').addEventListener('click', () => this.saveConfiguration());
+                
+                // Mode toggle events
+                this.modeWebhookRadio.addEventListener('change', () => this.toggleConfigMode());
+                this.modeConvaiRadio.addEventListener('change', () => this.toggleConfigMode());
+                
+                // Close modal on background click
+                this.configModal.addEventListener('click', (e) => {
+                    if (e.target === this.configModal) {
+                        this.hideConfigModal();
+                    }
+                });
+
+                // Keyboard shortcuts
+                document.addEventListener('keydown', (e) => {
+                    if (e.code === 'Space' && !e.target.matches('input, textarea')) {
+                        e.preventDefault();
+                        this.toggleListening();
+                    }
+                    if (e.key === 'Escape') {
+                        if (!this.configModal.classList.contains('hidden')) {
+                            this.hideConfigModal();
+                        }
+                    }
+                });
+            }
+
+            toggleConfigMode() {
+                if (this.modeWebhookRadio.checked) {
+                    this.webhookConfig.classList.remove('hidden');
+                    this.convaiConfig.classList.add('hidden');
+                } else {
+                    this.webhookConfig.classList.add('hidden');
+                    this.convaiConfig.classList.remove('hidden');
+                }
+            }
+
+            toggleListening() {
+                if (this.assistantMode === 'convai') {
+                    this.toggleConvAI();
+                } else {
+                    if (!this.recognition) {
+                        this.setStatus('Speech recognition not available', 'error');
+                        return;
+                    }
+
+                    if (this.isListening) {
+                        this.recognition.stop();
+                    } else {
+                        this.recognition.start();
+                    }
+                }
+            }
+
+            initConvAI() {
+                // Wait for the ElevenLabs script to load
+                const checkForElevenLabs = () => {
+                    if (window.ElevenLabsConvAI) {
+                        this.setupConvAI();
+                    } else {
+                        setTimeout(checkForElevenLabs, 100);
+                    }
+                };
+                
+                // Start checking after a short delay
+                setTimeout(checkForElevenLabs, 500);
+            }
+
+            setupConvAI() {
+                try {
+                    // Create the ConvAI widget element
+                    const convaiElement = document.createElement('elevenlabs-convai');
+                    convaiElement.setAttribute('agent-id', this.convaiAgentId);
+                    
+                    // Hide the widget initially if not in ConvAI mode
+                    if (this.assistantMode !== 'convai') {
+                        convaiElement.style.display = 'none';
+                    }
+                    
+                    // Add custom styling to match our theme
+                    convaiElement.style.cssText = `
+                        --el-primary-color: #00d4ff;
+                        --el-background-color: #1a1a2e;
+                        --el-text-color: #ffffff;
+                    `;
+                    
+                    document.body.appendChild(convaiElement);
+                    this.convaiWidget = convaiElement;
+                    
+                    this.setStatus('ConvAI ready', 'ready');
+                } catch (error) {
+                    console.error('Failed to setup ConvAI:', error);
+                    this.setStatus('ConvAI setup failed', 'error');
+                }
+            }
+
+            toggleConvAI() {
+                if (!this.convaiWidget) {
+                    this.setStatus('ConvAI not available', 'error');
+                    return;
+                }
+
+                // Toggle widget visibility and functionality
+                if (this.convaiWidget.style.display === 'none') {
+                    this.convaiWidget.style.display = 'block';
+                    this.setStatus('ConvAI activated', 'ready');
+                    this.addMessage('ConvAI is now active. Use the widget in the bottom-right corner to start talking.', false);
+                } else {
+                    this.convaiWidget.style.display = 'none';
+                    this.setStatus('ConvAI deactivated', 'ready');
+                }
+            }
+
+            setListening(listening) {
+                this.isListening = listening;
+                
+                if (listening) {
+                    this.micButton.classList.add('animate-listening');
+                    this.listeningIndicator.classList.remove('hidden');
+                    this.micIcon.innerHTML = `
+                        <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 012 0v4a1 1 0 11-2 0V7zM12 9a1 1 0 10-2 0v2a1 1 0 102 0V9z" clip-rule="evenodd"></path>
+                        </svg>
+                    `;
+                } else {
+                    this.micButton.classList.remove('animate-listening');
+                    this.listeningIndicator.classList.add('hidden');
+                    this.micIcon.innerHTML = `
+                        <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clip-rule="evenodd"></path>
+                        </svg>
+                    `;
+                }
+            }
+
+            setStatus(text, type = 'ready') {
+                this.statusText.textContent = text;
+                
+                // Update status indicator color
+                this.statusIndicator.className = 'w-3 h-3 rounded-full';
+                switch (type) {
+                    case 'listening':
+                        this.statusIndicator.classList.add('bg-blue-500', 'animate-pulse');
+                        break;
+                    case 'processing':
+                        this.statusIndicator.classList.add('bg-yellow-500', 'animate-pulse');
+                        break;
+                    case 'error':
+                        this.statusIndicator.classList.add('bg-red-500');
+                        break;
+                    default:
+                        this.statusIndicator.classList.add('bg-green-500', 'animate-pulse');
+                }
+            }
+
+            addMessage(content, isUser = false, isTyping = false) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'animate-slide-up';
+                
+                const avatarClass = isUser 
+                    ? 'bg-gray-600 text-white' 
+                    : 'bg-gradient-to-r from-cyber-blue to-cyber-purple';
+                const avatarContent = isUser ? 'U' : 'J';
+                const alignClass = isUser ? 'justify-end' : 'justify-start';
+                const bubbleClass = isUser 
+                    ? 'bg-cyber-blue text-white rounded-tr-none ml-auto' 
+                    : 'bg-dark-card text-gray-200 rounded-tl-none';
+
+                messageDiv.innerHTML = `
+                    <div class="flex items-start space-x-3 ${alignClass}">
+                        ${!isUser ? `
+                            <div class="w-8 h-8 rounded-full ${avatarClass} flex items-center justify-center flex-shrink-0">
+                                <span class="text-xs font-bold">${avatarContent}</span>
+                            </div>
+                        ` : ''}
+                        <div class="rounded-lg p-4 max-w-md ${bubbleClass}">
+                            ${isTyping ? `
+                                <div class="flex space-x-1">
+                                    <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                                    <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.1s"></div>
+                                    <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
+                                </div>
+                            ` : `<p>${content}</p>`}
+                        </div>
+                        ${isUser ? `
+                            <div class="w-8 h-8 rounded-full ${avatarClass} flex items-center justify-center flex-shrink-0">
+                                <span class="text-xs font-bold">${avatarContent}</span>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+
+                this.chatContainer.appendChild(messageDiv);
+                this.scrollToBottom();
+                
+                return messageDiv;
+            }
+
+            scrollToBottom() {
+                this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
+            }
+
+            async handleSpeechResult(transcript) {
+                // Add user message
+                this.addMessage(transcript, true);
+                
+                // Show typing indicator
+                const typingMessage = this.addMessage('', false, true);
+                this.setStatus('Processing...', 'processing');
+
+                try {
+                    // Send to webhook
+                    const response = await fetch(this.webhookUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            message: transcript,
+                            timestamp: new Date().toISOString(),
+                            source: 'jarvis-ui'
+                        })
+                    });
+
+                    // Remove typing indicator
+                    typingMessage.remove();
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        const jarvisResponse = data.response || data.message || 'I received your message but couldn\'t generate a response.';
+                        
+                        // Add Jarvis response
+                        this.addMessage(jarvisResponse, false);
+                        
+                        // Text-to-speech if enabled
+                        if (this.enableTTS) {
+                            this.speakText(jarvisResponse);
+                        }
+                        
+                        this.setStatus('Ready', 'ready');
+                    } else {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                } catch (error) {
+                    console.error('Webhook error:', error);
+                    typingMessage.remove();
+                    this.addMessage('Sorry, I encountered an error processing your request. Please check the webhook configuration.', false);
+                    this.setStatus('Error', 'error');
+                }
+            }
+
+            speakText(text) {
+                if ('speechSynthesis' in window) {
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.rate = 0.9;
+                    utterance.pitch = 1;
+                    utterance.volume = 0.8;
+                    speechSynthesis.speak(utterance);
+                }
+            }
+
+            showConfigModal() {
+                this.configModal.classList.remove('hidden');
+            }
+
+            hideConfigModal() {
+                this.configModal.classList.add('hidden');
+            }
+
+            loadConfiguration() {
+                this.webhookUrlInput.value = this.webhookUrl;
+                this.enableTTSCheckbox.checked = this.enableTTS;
+                this.convaiAgentIdInput.value = this.convaiAgentId;
+                
+                // Set the correct mode radio button
+                if (this.assistantMode === 'convai') {
+                    this.modeConvaiRadio.checked = true;
+                } else {
+                    this.modeWebhookRadio.checked = true;
+                }
+                
+                // Show/hide appropriate config sections
+                this.toggleConfigMode();
+                
+                // Update the interface based on current mode
+                this.updateInterfaceForMode();
+            }
+
+            saveConfiguration() {
+                this.webhookUrl = this.webhookUrlInput.value;
+                this.enableTTS = this.enableTTSCheckbox.checked;
+                this.convaiAgentId = this.convaiAgentIdInput.value;
+                this.assistantMode = this.modeConvaiRadio.checked ? 'convai' : 'webhook';
+
+                // Save to localStorage
+                localStorage.setItem('jarvis-webhook-url', this.webhookUrl);
+                localStorage.setItem('jarvis-enable-tts', this.enableTTS.toString());
+                localStorage.setItem('jarvis-convai-agent-id', this.convaiAgentId);
+                localStorage.setItem('jarvis-assistant-mode', this.assistantMode);
+
+                // Update ConvAI widget if agent ID changed
+                if (this.convaiWidget) {
+                    this.convaiWidget.setAttribute('agent-id', this.convaiAgentId);
+                }
+
+                // Update interface for new mode
+                this.updateInterfaceForMode();
+
+                this.hideConfigModal();
+                this.setStatus('Configuration saved', 'ready');
+                
+                // Clear status after 2 seconds
+                setTimeout(() => {
+                    this.setStatus('Ready', 'ready');
+                }, 2000);
+            }
+
+            updateInterfaceForMode() {
+                if (this.assistantMode === 'convai') {
+                    // Show ConvAI widget and update button text
+                    if (this.convaiWidget) {
+                        this.convaiWidget.style.display = 'block';
+                    }
+                    this.addMessage('ConvAI mode activated. Use the microphone button to toggle the ConvAI widget, or use the widget directly in the bottom-right corner.', false);
+                } else {
+                    // Hide ConvAI widget for webhook mode
+                    if (this.convaiWidget) {
+                        this.convaiWidget.style.display = 'none';
+                    }
+                    this.addMessage('Webhook mode activated. Use the microphone button to start voice recognition for webhook communication.', false);
+                }
+            }
+        }
+
+        // Initialize the interface when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new JarvisInterface();
+        });
+    </script>
+</body>
+</html>
