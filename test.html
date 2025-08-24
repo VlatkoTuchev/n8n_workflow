@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Talk to our AI Assistant</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      min-height: 100vh; margin: 0; display: grid; place-items: center;
+      background: #0b1220;
+    }
+    button {
+      padding: 14px 18px; border-radius: 12px; border: 0;
+      font-size: 16px; cursor: pointer; background: #2f7dd1; color: #fff;
+      box-shadow: 0 10px 25px rgba(47,125,209,.35);
+    }
+    button:active { transform: translateY(1px); }
+    #status { position: fixed; bottom: 12px; left: 12px; opacity: .85; font: 12px/1.4 system-ui; color:#cbd5e1; }
+  </style>
+</head>
+<body>
+
+  <button id="talk-now">🎙️ Talk to our AI Assistant</button>
+  <div id="status">idle</div>
+
+  <script>
+    // 🟢 Your values (as you provided)
+    const VAPI_PUBLIC_KEY = "627daad5-755f-4b36-b0ca-adc541003aa5";
+    const ASSISTANT_ID    = "81f6b082-aabc-4832-b51c-5941c39ea32e";
+
+    // Utility to set a small status text
+    const setStatus = (s) => document.getElementById("status").textContent = s;
+
+    // Ask for a "speech-optimized" mic:
+    // These constraints help reduce echo and noise for spoken voice.
+    async function getCleanMic() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1
+            // NOTE: do not force sampleRate/sampleSize; let the browser choose
+          }
+        });
+        // We don't attach the stream — the Vapi widget opens its own.
+        // This call warms up permissions and applies browser DSP defaults.
+        stream.getTracks().forEach(t => t.stop());
+        return true;
+      } catch (err) {
+        console.error("Mic permission failed:", err);
+        alert("Microphone permission is required to start.");
+        return false;
+      }
+    }
+
+    // Load the latest Vapi HTML script-tag SDK
+    (function (d, t) {
+      const g = d.createElement(t), s = d.getElementsByTagName(t)[0];
+      g.src = "https://cdn.jsdelivr.net/gh/VapiAI/html-script-tag@latest/dist/assets/index.js";
+      g.defer = true; g.async = true; s.parentNode.insertBefore(g, s);
+
+      g.onload = function () {
+        // Init the widget
+        window.vapiInstance = window.vapiSDK.run({
+          apiKey: VAPI_PUBLIC_KEY,      // must be a Public/Web key
+          assistant: ASSISTANT_ID,      // default assistant
+          config: {
+            position: "bottom-right",   // widget UI
+          }
+        });
+
+        // helpful event logging
+        const on = (ev, cb) => window.vapiInstance?.on?.(ev, cb);
+        on("status-update", (e) => setStatus(`status: ${e?.status || "?"}`));
+        on("error", (e) => { console.error("Vapi error:", e); setStatus("error"); });
+        on("call-start", (e) => setStatus("call-start"));
+        on("call-end", (e) => setStatus("call-end"));
+        on("transcript", (e) => console.debug("transcript:", e));
+        setStatus("widget ready");
+      };
+    })(document, "script");
+
+    // Button click → ensure mic perms & start web call
+    document.getElementById("talk-now").addEventListener("click", async () => {
+      setStatus("requesting mic…");
+      const ok = await getCleanMic();
+      if (!ok) return;
+
+      try {
+        setStatus("starting…");
+        // Passing the assistant ID here avoids older-SDK "Assistant/Squad required" errors
+        await window.vapiInstance.start(ASSISTANT_ID);
+        setStatus("connected");
+      } catch (e) {
+        console.error("vapi.start failed:", e);
+        setStatus("start failed");
+        alert("Could not start the call. See console for details.");
+      }
+    });
+  </script>
+</body>
+</html>
