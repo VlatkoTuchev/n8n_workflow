@@ -294,6 +294,7 @@
             }
         }
     </style>
+    <script src="https://unpkg.com/@daily-co/daily-js"></script>
 </head>
 <body>
     <div class="header">
@@ -377,6 +378,7 @@
         </div>
         <div class="avatar-container">
             <video id="remoteVideo" autoplay playsinline></video>
+            <audio id="remoteAudio" autoplay></audio>
             <div class="loading-spinner" id="loadingSpinner"></div>
             <div class="connection-status">
                 <span class="status-dot" id="statusDot"></span>
@@ -396,8 +398,8 @@
     <script>
         // Configuration
         const API_KEY = 'b6e8a92c4e0f46468e56d19d3305d56e'; // Not used client-side when proxying
-        const REPLICA_ID = 'r9d30b0e55ac';
-        const PERSONA_ID = 'pe13ed370726';
+        const REPLICA_ID = 'rf4703150052';
+        const PERSONA_ID = 'pf30d92487a7';
         const API_BASE_URL = 'http://localhost:4000/api';
         
         let conversationId = null;
@@ -406,6 +408,7 @@
         let isMuted = false;
         let isVideoOn = true;
         let isEmbeddedConversation = false;
+        let dailyCall = null;
 
         // Toggle Avatar Modal
         function toggleAvatar() {
@@ -453,6 +456,10 @@
                 iframe.remove();
                 isEmbeddedConversation = false;
             }
+            if (dailyCall) {
+                try { dailyCall.leave(); dailyCall.destroy(); } catch (_) {}
+                dailyCall = null;
+            }
             
             // End conversation
             if (conversationId) {
@@ -477,7 +484,13 @@
                     body: JSON.stringify({
                         replica_id: REPLICA_ID,
                         persona_id: PERSONA_ID,
-                        conversation_name: 'Interview User'
+                        memory_stores: [`vlatko_${PERSONA_ID}`],
+                        conversation_name: 'Course Finder Buddy',
+                        properties: {
+                            apply_greenscreen: true,
+                            participant_left_timeout: 0,
+                            language: 'english'
+                        }
                     })
                 });
 
@@ -492,9 +505,9 @@
                 // Persist for cleanup in case the page is closed unexpectedly
                 try { localStorage.setItem('lastConversationId', conversationId); } catch (_) {}
                 
-                // Prefer embedding if Tavus returns a conversation_url (e.g., Daily.co)
+                // Prefer programmatic join if Tavus returns a conversation_url (Daily.co)
                 if (data && data.conversation_url) {
-                    embedConversation(data.conversation_url);
+                    await joinDailyConversation(data.conversation_url);
                 } else {
                     // Initialize direct WebRTC (fallback)
                     await initializeWebRTC(data);
@@ -614,6 +627,90 @@
                 console.error('Failed to embed conversation URL:', e);
                 updateStatus('Connection failed', false);
             }
+        }
+
+        // Programmatic join via Daily JS to auto-join and render only media, no meeting UI
+        async function joinDailyConversation(url) {
+            updateStatus('Connecting...', false);
+            if (!window.DailyIframe) {
+                console.error('Daily JS SDK not loaded');
+                updateStatus('Connection failed', false);
+                return;
+            }
+            const remoteVideo = document.getElementById('remoteVideo');
+            const remoteAudio = document.getElementById('remoteAudio');
+            remoteVideo.style.display = '';
+
+            dailyCall = window.DailyIframe.createCallObject({});
+            // Ensure we subscribe to remote media
+            try {
+                dailyCall.setSubscribeSettings({ base: { audio: true, video: true, screenVideo: false, screenAudio: false } });
+            } catch (_) {}
+            dailyCall.on('joined-meeting', () => {
+                updateStatus('Connected', true);
+                const spinner = document.getElementById('loadingSpinner');
+                if (spinner) spinner.style.display = 'none';
+            });
+            dailyCall.on('error', (e) => {
+                console.error('Daily error:', e);
+                updateStatus('Connection failed', false);
+            });
+            dailyCall.on('track-started', (ev) => {
+                try {
+                    if (!ev.participant.local && ev.track) {
+                        if (ev.kind === 'video') {
+                            const stream = new MediaStream([ev.track]);
+                            remoteVideo.srcObject = stream;
+                            remoteVideo.play().catch(() => {});
+                        } else if (ev.kind === 'audio' && remoteAudio) {
+                            const stream = new MediaStream([ev.track]);
+                            remoteAudio.srcObject = stream;
+                            remoteAudio.play().catch(() => {});
+                        }
+                    }
+                } catch (err) {
+                    console.warn('track-started handler error', err);
+                }
+            });
+            dailyCall.on('participant-updated', (ev) => {
+                try {
+                    const p = ev.participant;
+                    if (p && !p.local) {
+                        const v = p.tracks && p.tracks.video;
+                        if (v && v.state === 'playable' && v.track) {
+                            const stream = new MediaStream([v.track]);
+                            remoteVideo.srcObject = stream;
+                            remoteVideo.play().catch(() => {});
+                        }
+                        const a = p.tracks && p.tracks.audio;
+                        if (a && a.state === 'playable' && a.track && remoteAudio) {
+                            const stream = new MediaStream([a.track]);
+                            remoteAudio.srcObject = stream;
+                            remoteAudio.play().catch(() => {});
+                        }
+                    }
+                } catch (_) {}
+            });
+
+            await dailyCall.join({
+                url,
+                startVideoOff: true,
+                startAudioOff: false
+            });
+            isEmbeddedConversation = true;
+
+            // Fallback: if no video after 10s, embed room iframe
+            setTimeout(() => {
+                try {
+                    const hasVideo = remoteVideo && remoteVideo.srcObject && remoteVideo.srcObject.getVideoTracks().length > 0;
+                    if (!hasVideo) {
+                        console.warn('No remote video yet, falling back to iframe embed');
+                        embedConversation(url);
+                    }
+                } catch (_) {
+                    embedConversation(url);
+                }
+            }, 10000);
         }
 
         // Try to discover signaling endpoints from the conversation response and complete SDP exchange
