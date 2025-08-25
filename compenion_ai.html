@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Course Finder Buddy - Your AI Learning Companion</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #f5f5dc 0%, #e8dcc7 100%);
+            min-height: 100vh;
+            position: relative;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 20px 40px;
+            box-shadow: 0 2px 20px rgba(0, 0, 0, 0.08);
+        }
+
+        .header h1 {
+            color: #4a4a4a;
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .header p {
+            color: #7a7a7a;
+            margin-top: 5px;
+        }
+
+        .main-content {
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .course-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 25px;
+            margin-top: 30px;
+        }
+
+        .course-card {
+            background: white;
+            border-radius: 16px;
+            padding: 25px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .course-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+        }
+
+        .course-card h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 20px;
+        }
+
+        .course-card p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        .course-tag {
+            display: inline-block;
+            background: #f0e6d2;
+            color: #8b7355;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            margin-right: 8px;
+        }
+
+        /* Chat Button */
+        .chat-button {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .chat-button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 15px 40px rgba(102, 126, 234, 0.5);
+        }
+
+        .chat-button svg {
+            width: 35px;
+            height: 35px;
+            fill: white;
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+            }
+            50% {
+                box-shadow: 0 10px 40px rgba(102, 126, 234, 0.6);
+            }
+            100% {
+                box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+            }
+        }
+
+        /* Avatar Modal */
+        .avatar-modal {
+            display: none;
+            position: fixed;
+            bottom: 120px;
+            right: 30px;
+            width: 450px;
+            height: 600px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            z-index: 999;
+            overflow: hidden;
+            animation: slideUp 0.3s ease;
+        }
+
+        @keyframes slideUp {
+            from {
+                transform: translateY(100px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .avatar-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .avatar-header h3 {
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.3s ease;
+        }
+
+        .close-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .avatar-container {
+            position: relative;
+            height: calc(100% - 70px);
+            background: #f9f9f9;
+        }
+
+        #remoteVideo {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+        }
+
+        .connection-status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ffa500;
+        }
+
+        .status-dot.connected {
+            background: #4caf50;
+        }
+
+        .loading-spinner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 50px;
+            height: 50px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: translate(-50%, -50%) rotate(0deg); }
+            100% { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+
+        .control-buttons {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+        }
+
+        .control-btn {
+            width: 45px;
+            height: 45px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.9);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+
+        .control-btn:hover {
+            background: white;
+            transform: scale(1.1);
+        }
+
+        .control-btn.muted {
+            background: #ff4444;
+            color: white;
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            .avatar-modal {
+                width: 100%;
+                height: 100%;
+                bottom: 0;
+                right: 0;
+                border-radius: 0;
+            }
+
+            .chat-button {
+                bottom: 20px;
+                right: 20px;
+                width: 60px;
+                height: 60px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📚 Course Finder Buddy</h1>
+        <p>Your AI-powered learning companion for discovering the perfect courses</p>
+    </div>
+
+    <div class="main-content">
+        <h2 style="color: #4a4a4a; margin-bottom: 10px;">Featured Courses</h2>
+        <p style="color: #7a7a7a;">Explore our curated selection of courses tailored to your learning journey</p>
+        
+        <div class="course-grid">
+            <div class="course-card">
+                <h3>Web Development Bootcamp</h3>
+                <p>Master modern web technologies including HTML5, CSS3, JavaScript, and React.</p>
+                <div>
+                    <span class="course-tag">Beginner</span>
+                    <span class="course-tag">12 weeks</span>
+                </div>
+            </div>
+            
+            <div class="course-card">
+                <h3>Data Science Fundamentals</h3>
+                <p>Learn Python, statistics, and machine learning basics for data analysis.</p>
+                <div>
+                    <span class="course-tag">Intermediate</span>
+                    <span class="course-tag">8 weeks</span>
+                </div>
+            </div>
+            
+            <div class="course-card">
+                <h3>Digital Marketing Mastery</h3>
+                <p>Comprehensive guide to SEO, social media, and content marketing strategies.</p>
+                <div>
+                    <span class="course-tag">All Levels</span>
+                    <span class="course-tag">6 weeks</span>
+                </div>
+            </div>
+            
+            <div class="course-card">
+                <h3>AI & Machine Learning</h3>
+                <p>Deep dive into neural networks, deep learning, and AI applications.</p>
+                <div>
+                    <span class="course-tag">Advanced</span>
+                    <span class="course-tag">16 weeks</span>
+                </div>
+            </div>
+            
+            <div class="course-card">
+                <h3>UX/UI Design Principles</h3>
+                <p>Create stunning user interfaces and exceptional user experiences.</p>
+                <div>
+                    <span class="course-tag">Intermediate</span>
+                    <span class="course-tag">10 weeks</span>
+                </div>
+            </div>
+            
+            <div class="course-card">
+                <h3>Business Analytics</h3>
+                <p>Transform data into actionable business insights and strategies.</p>
+                <div>
+                    <span class="course-tag">Intermediate</span>
+                    <span class="course-tag">8 weeks</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat Button -->
+    <div class="chat-button pulse" onclick="toggleAvatar()">
+        <svg viewBox="0 0 24 24">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/>
+        </svg>
+    </div>
+
+    <!-- Avatar Modal -->
+    <div class="avatar-modal" id="avatarModal">
+        <div class="avatar-header">
+            <h3>Course Finder Buddy</h3>
+            <button class="close-btn" onclick="closeAvatar()">✕</button>
+        </div>
+        <div class="avatar-container">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <div class="loading-spinner" id="loadingSpinner"></div>
+            <div class="connection-status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">Connecting...</span>
+            </div>
+            <div class="control-buttons">
+                <button class="control-btn" onclick="toggleMute()" id="muteBtn">
+                    🎤
+                </button>
+                <button class="control-btn" onclick="toggleVideo()" id="videoBtn">
+                    📹
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_KEY = 'b6e8a92c4e0f46468e56d19d3305d56e'; // Not used client-side when proxying
+        const REPLICA_ID = 'r9d30b0e55ac';
+        const PERSONA_ID = 'pe13ed370726';
+        const API_BASE_URL = 'http://localhost:4000/api';
+        
+        let conversationId = null;
+        let peerConnection = null;
+        let localStream = null;
+        let isMuted = false;
+        let isVideoOn = true;
+        let isEmbeddedConversation = false;
+
+        // Toggle Avatar Modal
+        function toggleAvatar() {
+            const modal = document.getElementById('avatarModal');
+            if (modal.style.display === 'block') {
+                closeAvatar();
+            } else {
+                openAvatar();
+            }
+        }
+
+        // Open Avatar
+        async function openAvatar() {
+            const modal = document.getElementById('avatarModal');
+            modal.style.display = 'block';
+            
+            try {
+                // Start the conversation
+                await startConversation();
+            } catch (error) {
+                console.error('Error starting conversation:', error);
+                updateStatus('Error connecting', false);
+            }
+        }
+
+        // Close Avatar
+        function closeAvatar() {
+            const modal = document.getElementById('avatarModal');
+            modal.style.display = 'none';
+            
+            // Clean up WebRTC connection
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+
+            // Remove embedded iframe if any
+            const iframe = document.getElementById('conversationFrame');
+            if (iframe) {
+                iframe.remove();
+                isEmbeddedConversation = false;
+            }
+            
+            // End conversation
+            if (conversationId) {
+                endConversation();
+            }
+        }
+
+        // Start Conversation with Tavus API
+        async function startConversation(retry = false) {
+            updateStatus('Initializing...', false);
+            
+            try {
+                // Attempt to clean up any stale conversation from a previous session
+                await cleanupStaleConversation();
+
+                // Create conversation
+                const response = await fetch(`${API_BASE_URL}/conversations`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        replica_id: REPLICA_ID,
+                        persona_id: PERSONA_ID,
+                        conversation_name: 'Interview User'
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text().catch(() => '');
+                    throw new Error(`HTTP error! status: ${response.status}${errorText ? ` - ${errorText}` : ''}`);
+                }
+
+                const data = await response.json();
+                console.log('Tavus conversation created:', data);
+                conversationId = data.conversation_id || data.id;
+                // Persist for cleanup in case the page is closed unexpectedly
+                try { localStorage.setItem('lastConversationId', conversationId); } catch (_) {}
+                
+                // Prefer embedding if Tavus returns a conversation_url (e.g., Daily.co)
+                if (data && data.conversation_url) {
+                    embedConversation(data.conversation_url);
+                } else {
+                    // Initialize direct WebRTC (fallback)
+                    await initializeWebRTC(data);
+                }
+                
+            } catch (error) {
+                console.error('Error creating conversation:', error);
+                updateStatus('Connection failed', false);
+                const message = String(error && error.message ? error.message : '');
+                if (!retry && message.toLowerCase().includes('maximum concurrent conversations')) {
+                    // Cleanup and retry once
+                    await cleanupStaleConversation();
+                    return startConversation(true);
+                }
+                alert('Failed to connect to AI assistant. Please try again.');
+            }
+        }
+
+        // Initialize WebRTC Connection
+        async function initializeWebRTC(conversationData) {
+            updateStatus('Setting up video...', false);
+            
+            try {
+                // Get user media
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: true, 
+                    audio: true 
+                });
+
+                // Create peer connection
+                peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                });
+
+                // Add local stream
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+
+                // Handle remote stream
+                peerConnection.ontrack = async (event) => {
+                    const remoteVideo = document.getElementById('remoteVideo');
+                    if (remoteVideo.srcObject !== event.streams[0]) {
+                        remoteVideo.srcObject = event.streams[0];
+                        document.getElementById('loadingSpinner').style.display = 'none';
+                        updateStatus('Connected', true);
+                        try { await remoteVideo.play(); } catch (_) {}
+                    }
+                };
+
+                // Handle connection state changes
+                peerConnection.onconnectionstatechange = () => {
+                    switch(peerConnection.connectionState) {
+                        case 'connected':
+                            updateStatus('Connected', true);
+                            break;
+                        case 'disconnected':
+                            updateStatus('Disconnected', false);
+                            break;
+                        case 'failed':
+                            updateStatus('Connection failed', false);
+                            break;
+                    }
+                };
+
+                // Create and set local description
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                // Exchange SDP with Tavus if signaling URLs are present in the response
+                try {
+                    await negotiateWithTavus(conversationData, offer);
+                    updateStatus('Connecting...', false);
+                } catch (e) {
+                    console.warn('Negotiation step failed:', e);
+                    updateStatus('Waiting for remote...', false);
+                }
+                
+            } catch (error) {
+                console.error('WebRTC initialization error:', error);
+                updateStatus('Camera/mic access denied', false);
+            }
+        }
+
+        // Embed the Tavus conversation URL (e.g., Daily.co room) inside the modal
+        function embedConversation(url) {
+            try {
+                updateStatus('Connecting...', false);
+                const container = document.querySelector('.avatar-container');
+                const existing = document.getElementById('conversationFrame');
+                if (existing) existing.remove();
+
+                // Hide the raw <video> element when embedding
+                const remoteVideo = document.getElementById('remoteVideo');
+                remoteVideo.style.display = 'none';
+
+                const iframe = document.createElement('iframe');
+                iframe.id = 'conversationFrame';
+                iframe.src = url;
+                iframe.style.position = 'absolute';
+                iframe.style.top = '0';
+                iframe.style.left = '0';
+                iframe.style.width = '100%';
+                iframe.style.height = '100%';
+                iframe.style.border = '0';
+                iframe.allow = 'camera; microphone; autoplay; fullscreen; display-capture; clipboard-read; clipboard-write; encrypted-media;';
+                iframe.referrerPolicy = 'no-referrer';
+                iframe.addEventListener('load', () => {
+                    document.getElementById('loadingSpinner').style.display = 'none';
+                    updateStatus('Connected', true);
+                });
+                container.appendChild(iframe);
+                isEmbeddedConversation = true;
+            } catch (e) {
+                console.error('Failed to embed conversation URL:', e);
+                updateStatus('Connection failed', false);
+            }
+        }
+
+        // Try to discover signaling endpoints from the conversation response and complete SDP exchange
+        async function negotiateWithTavus(conversationData, offer) {
+            const tryPaths = [];
+            // Heuristics: use explicit URLs if provided by API
+            if (conversationData && typeof conversationData === 'object') {
+                // Common patterns we might see
+                const candidates = [
+                    'webrtc', 'rtc', 'signaling', 'signal', 'sdp'
+                ];
+                for (const key of Object.keys(conversationData)) {
+                    if (candidates.some(c => key.toLowerCase().includes(c))) {
+                        const val = conversationData[key];
+                        if (val && typeof val === 'object') {
+                            for (const sub of Object.keys(val)) {
+                                const v = val[sub];
+                                if (typeof v === 'string' && /offer|sdp/i.test(sub)) {
+                                    tryPaths.push(v);
+                                }
+                            }
+                        } else if (typeof val === 'string') {
+                            tryPaths.push(val);
+                        }
+                    }
+                }
+            }
+
+            // Fallback guesses based on typical REST shapes
+            if (conversationId) {
+                tryPaths.push(
+                    `${API_BASE_URL}/conversations/${conversationId}/webrtc/offer`,
+                    `${API_BASE_URL}/conversations/${conversationId}/rtc/offer`,
+                    `${API_BASE_URL}/conversations/${conversationId}/sdp/offer`,
+                    `${API_BASE_URL}/conversations/${conversationId}/webrtc`
+                );
+            }
+
+            let lastErr = null;
+            for (const url of tryPaths) {
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-api-key': API_KEY
+                        },
+                        body: JSON.stringify({
+                            sdp: offer.sdp,
+                            type: offer.type || 'offer'
+                        })
+                    });
+                    if (!res.ok) {
+                        const t = await res.text().catch(() => '');
+                        throw new Error(`${res.status} ${t}`);
+                    }
+                    const answer = await res.json();
+                    const remoteDesc = new RTCSessionDescription({
+                        type: (answer.type || 'answer'),
+                        sdp: answer.sdp || answer.answer || answer.remote_sdp
+                    });
+                    await peerConnection.setRemoteDescription(remoteDesc);
+                    return true;
+                } catch (err) {
+                    lastErr = err;
+                    console.debug('Signaling attempt failed at', url, err);
+                }
+            }
+            throw lastErr || new Error('No valid Tavus signaling endpoint found.');
+        }
+
+        // End Conversation
+        async function endConversation() {
+            if (!conversationId) return;
+            
+            try {
+                await fetch(`${API_BASE_URL}/conversations/${conversationId}`, {
+                    method: 'DELETE',
+                    headers: {}
+                });
+                conversationId = null;
+                try { localStorage.removeItem('lastConversationId'); } catch (_) {}
+            } catch (error) {
+                console.error('Error ending conversation:', error);
+            }
+        }
+
+        // Best-effort cleanup for stale conversations to avoid hitting concurrency limits
+        async function cleanupStaleConversation() {
+            let staleId = null;
+            try { staleId = localStorage.getItem('lastConversationId'); } catch (_) {}
+            if (!staleId) return false;
+            try {
+                await fetch(`${API_BASE_URL}/conversations/${staleId}`, {
+                    method: 'DELETE',
+                    headers: {}
+                });
+            } catch (e) {
+                console.warn('Cleanup of stale conversation failed:', e);
+            } finally {
+                try { localStorage.removeItem('lastConversationId'); } catch (_) {}
+            }
+            return true;
+        }
+
+        // Toggle Mute
+        function toggleMute() {
+            if (localStream) {
+                const audioTrack = localStream.getAudioTracks()[0];
+                if (audioTrack) {
+                    audioTrack.enabled = !audioTrack.enabled;
+                    isMuted = !audioTrack.enabled;
+                    const muteBtn = document.getElementById('muteBtn');
+                    muteBtn.classList.toggle('muted', isMuted);
+                    muteBtn.textContent = isMuted ? '🔇' : '🎤';
+                }
+            }
+        }
+
+        // Toggle Video
+        function toggleVideo() {
+            if (localStream) {
+                const videoTrack = localStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    videoTrack.enabled = !videoTrack.enabled;
+                    isVideoOn = videoTrack.enabled;
+                    const videoBtn = document.getElementById('videoBtn');
+                    videoBtn.textContent = isVideoOn ? '📹' : '📵';
+                }
+            }
+        }
+
+        // Update Connection Status
+        function updateStatus(text, isConnected) {
+            document.getElementById('statusText').textContent = text;
+            const statusDot = document.getElementById('statusDot');
+            statusDot.classList.toggle('connected', isConnected);
+        }
+
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            if (conversationId) {
+                endConversation();
+            }
+        });
+    </script>
+</body>
+</html>
