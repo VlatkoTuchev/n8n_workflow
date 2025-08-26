@@ -224,7 +224,11 @@
             const loader = new GLTFLoader();
             const assetsBase = '/public/assets/';
 
-            const modelFiles = { walk: 'Animation_Walking_withSkin.glb', dance: 'Animation_All_Night_Dance_withSkin.glb' };
+            const modelFiles = { 
+                walk: 'Animation_Walking_withSkin.glb', 
+                dance: 'Animation_All_Night_Dance_withSkin.glb',
+                boxing: 'Animation_Boxing_Practice_withSkin.glb'
+            };
 
             let avatarRoot = null;
             let animationMixer = null;
@@ -296,8 +300,9 @@
 
             function chooseNextBehavior(now) {
                 const r = Math.random();
-                if (r < 0.7) { behavior = 'walk'; velocityX = (Math.random() < 0.5 ? -1 : 1) * (0.35 + Math.random() * 0.25); crossFadeTo('walk'); }
-                else { behavior = 'dance'; velocityX = 0; crossFadeTo('dance'); }
+                if (r < 0.6) { behavior = 'walk'; velocityX = (Math.random() < 0.5 ? -1 : 1) * (0.35 + Math.random() * 0.25); crossFadeTo('walk'); }
+                else if (r < 0.85) { behavior = 'dance'; velocityX = 0; crossFadeTo('dance'); }
+                else { behavior = 'boxing'; velocityX = 0; crossFadeTo('boxing'); }
                 behaviorUntil = now + 3000 + Math.random() * 5000;
             }
 
@@ -375,7 +380,10 @@
                     normalizeAndGroundModel(avatarRoot); scene.add(avatarRoot);
                     animationMixer = new AnimationMixer(avatarRoot);
                     if (gltf.animations && gltf.animations[0]) nameToAction.walk = animationMixer.clipAction(gltf.animations[0]);
-                    const toLoad = [{ key: 'dance', file: modelFiles.dance }];
+                    const toLoad = [
+                        { key: 'dance', file: modelFiles.dance },
+                        { key: 'boxing', file: modelFiles.boxing }
+                    ];
                     let loaded = 0;
                     toLoad.forEach(({ key, file }) => loader.load(assetsBase + file, (agltf) => {
                         if (agltf.animations && agltf.animations.length) nameToAction[key] = animationMixer.clipAction(agltf.animations[0]);
