@@ -100,75 +100,7 @@
             width: 100% !important;
             height: 100% !important;
         }
-        
-        /* Auto-start overlay */
-        #autoStartOverlay {
-            position: fixed;
-            inset: 0;
-            z-index: 9999;
-            background: rgba(0,0,0,0.7);
-            backdrop-filter: blur(5px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: opacity 0.3s ease;
-        }
-        
-        #autoStartOverlay.hidden {
-            opacity: 0;
-            pointer-events: none;
-        }
-        
-        .auto-start-message {
-            background: white;
-            padding: 30px;
-            border-radius: 16px;
-            text-align: center;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        
-        .auto-start-message h2 {
-            color: #333;
-            margin-bottom: 15px;
-        }
-        
-        .auto-start-message p {
-            color: #666;
-            margin-bottom: 20px;
-        }
-        
-        .start-button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 12px 30px;
-            border-radius: 25px;
-            font-size: 16px;
-            cursor: pointer;
-            transition: transform 0.2s;
-        }
-        
-        .start-button:hover {
-            transform: scale(1.05);
-        }
-        
-        .status-message {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: rgba(0,0,0,0.8);
-            color: white;
-            padding: 10px 20px;
-            border-radius: 8px;
-            display: none;
-            z-index: 10000;
-        }
-        
-        .status-message.show {
-            display: block;
-        }
     </style>
-    <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
     <script type="importmap">
     {
         "imports": {
@@ -246,258 +178,8 @@
 
     <!-- 3D Avatar Layer -->
     <div class="three-avatar-layer" id="threeAvatarLayer"></div>
-    
-    <!-- Auto-start overlay -->
-    <div id="autoStartOverlay">
-        <div class="auto-start-message">
-            <h2>Welcome! 👋</h2>
-            <p>Click to activate Jarvis voice assistant</p>
-            <button class="start-button" onclick="initializeJarvis()">Start Jarvis</button>
-        </div>
-    </div>
-    
-    <!-- Status message -->
-    <div id="statusMessage" class="status-message"></div>
 
     <script>
-        // ====================
-        // JARVIS AUTO-START SYSTEM - FIXED VERSION
-        // ====================
-        const convaiAgentId = 'agent_2901k3evtsjjftzasdcjqzv75q01';
-        let jarvisStarted = false;
-        let convaiWidget = null;
-        let initAttempts = 0;
-        const maxAttempts = 10;
-        
-        // Show status message
-        function showStatus(message, duration = 3000) {
-            const statusEl = document.getElementById('statusMessage');
-            if (statusEl) {
-                statusEl.textContent = message;
-                statusEl.classList.add('show');
-                if (duration > 0) {
-                    setTimeout(() => {
-                        statusEl.classList.remove('show');
-                    }, duration);
-                }
-            }
-            console.log('Status:', message);
-        }
-        
-        // Main initialization function
-        async function initializeJarvis() {
-            if (jarvisStarted) return;
-            jarvisStarted = true;
-            
-            showStatus('Initializing Jarvis...', 0);
-            
-            // Hide overlay
-            const overlay = document.getElementById('autoStartOverlay');
-            if (overlay) {
-                overlay.classList.add('hidden');
-                setTimeout(() => overlay.remove(), 300);
-            }
-            
-            // Request microphone permission first
-            try {
-                showStatus('Requesting microphone access...', 0);
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach(t => t.stop());
-                showStatus('Microphone access granted', 2000);
-            } catch (err) {
-                showStatus('Microphone access denied. Voice features may not work.', 5000);
-                console.error('Microphone permission denied:', err);
-            }
-            
-            // Wait a bit for the widget script to load
-            setTimeout(() => {
-                createAndStartConvAI();
-            }, 1000);
-        }
-        
-        // Create and initialize the ConvAI widget
-        function createAndStartConvAI() {
-            showStatus('Creating voice assistant...', 0);
-            
-            // Remove any existing widget
-            const existing = document.querySelector('elevenlabs-convai');
-            if (existing) {
-                existing.remove();
-            }
-            
-            // Create the widget programmatically
-            convaiWidget = document.createElement('elevenlabs-convai');
-            convaiWidget.setAttribute('agent-id', convaiAgentId);
-            
-            // Set it to be invisible but functional
-            convaiWidget.style.position = 'fixed';
-            convaiWidget.style.bottom = '20px';
-            convaiWidget.style.right = '20px';
-            convaiWidget.style.width = '1px';
-            convaiWidget.style.height = '1px';
-            convaiWidget.style.opacity = '0';
-            convaiWidget.style.pointerEvents = 'none';
-            convaiWidget.style.zIndex = '-1';
-            
-            // Append to body
-            document.body.appendChild(convaiWidget);
-            
-            showStatus('Waiting for widget to load...', 0);
-            
-            // Wait for the custom element to be defined
-            if (window.customElements && window.customElements.whenDefined) {
-                window.customElements.whenDefined('elevenlabs-convai').then(() => {
-                    showStatus('Widget loaded, starting conversation...', 0);
-                    attemptToStart();
-                }).catch(err => {
-                    showStatus('Error loading widget', 5000);
-                    console.error('Widget definition error:', err);
-                });
-            } else {
-                // Fallback: try after delay
-                setTimeout(() => {
-                    attemptToStart();
-                }, 2000);
-            }
-        }
-        
-        // Attempt to start the conversation
-        function attemptToStart() {
-            if (!convaiWidget || initAttempts >= maxAttempts) {
-                if (initAttempts >= maxAttempts) {
-                    showStatus('Unable to start voice assistant. Please refresh the page.', 0);
-                }
-                return;
-            }
-            
-            initAttempts++;
-            showStatus(`Starting conversation (attempt ${initAttempts}/${maxAttempts})...`, 0);
-            
-            // Try direct API methods
-            const methods = ['startConversation', 'start', 'open', 'connect', 'begin'];
-            let started = false;
-            
-            for (const method of methods) {
-                try {
-                    if (typeof convaiWidget[method] === 'function') {
-                        console.log(`Trying method: ${method}`);
-                        convaiWidget[method]();
-                        started = true;
-                    }
-                } catch (e) {
-                    console.log(`Method ${method} failed:`, e);
-                }
-            }
-            
-            // Also try to trigger via shadow DOM
-            setTimeout(() => {
-                findAndClickStartButton();
-            }, 500);
-            
-            // Check if conversation started
-            setTimeout(() => {
-                checkIfStarted();
-            }, 2000);
-        }
-        
-        // Find and click the internal start button
-        function findAndClickStartButton() {
-            if (!convaiWidget) return;
-            
-            try {
-                // Get shadow root
-                const shadowRoot = convaiWidget.shadowRoot;
-                if (!shadowRoot) {
-                    console.log('No shadow root yet');
-                    return;
-                }
-                
-                // Look for any button that might start the conversation
-                const buttons = shadowRoot.querySelectorAll('button, div[role="button"], [data-testid*="start"], [aria-label*="start" i]');
-                
-                buttons.forEach(button => {
-                    const text = (button.textContent || button.ariaLabel || '').toLowerCase();
-                    if (text.includes('start') || text.includes('call') || text.includes('begin') || text.includes('connect')) {
-                        console.log('Found potential start button:', button);
-                        
-                        // Try multiple event types
-                        ['mousedown', 'mouseup', 'click', 'pointerdown', 'pointerup'].forEach(eventType => {
-                            button.dispatchEvent(new MouseEvent(eventType, {
-                                bubbles: true,
-                                cancelable: true,
-                                view: window
-                            }));
-                        });
-                        
-                        // Also try keyboard activation
-                        button.focus && button.focus();
-                        button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-                    }
-                });
-                
-                // Also try clicking on the widget itself
-                if (buttons.length === 0) {
-                    console.log('No buttons found, trying to click widget container');
-                    const containers = shadowRoot.querySelectorAll('div, section');
-                    if (containers.length > 0) {
-                        containers[0].click();
-                    }
-                }
-                
-            } catch (e) {
-                console.log('Error accessing shadow DOM:', e);
-            }
-        }
-        
-        // Check if the conversation has started
-        function checkIfStarted() {
-            if (!convaiWidget) return;
-            
-            // Check various indicators that the conversation might be active
-            try {
-                const shadowRoot = convaiWidget.shadowRoot;
-                if (shadowRoot) {
-                    // Look for active state indicators
-                    const activeElements = shadowRoot.querySelectorAll('[data-state="active"], [aria-live], audio, video');
-                    if (activeElements.length > 0) {
-                        showStatus('Voice assistant is ready! Start speaking.', 5000);
-                        console.log('Conversation appears to be active');
-                        return;
-                    }
-                }
-            } catch (e) {
-                console.log('Error checking status:', e);
-            }
-            
-            // If not started and we have attempts left, try again
-            if (initAttempts < maxAttempts) {
-                setTimeout(() => {
-                    attemptToStart();
-                }, 2000);
-            } else {
-                showStatus('Voice assistant may be ready. Try speaking.', 5000);
-            }
-        }
-        
-        // Auto-start when page loads (if user previously interacted)
-        window.addEventListener('DOMContentLoaded', () => {
-            // Check if user has previously started Jarvis
-            const previouslyStarted = sessionStorage.getItem('jarvis-started');
-            if (previouslyStarted === 'true') {
-                // Auto-start after short delay
-                setTimeout(() => {
-                    initializeJarvis();
-                }, 1500);
-            }
-        });
-        
-        // Track that user has started Jarvis
-        window.addEventListener('click', () => {
-            if (jarvisStarted) {
-                sessionStorage.setItem('jarvis-started', 'true');
-            }
-        }, { once: true });
-
         // ====================
         // 3D AVATAR (THREE.JS) - Preserved from original
         // ====================
@@ -713,6 +395,165 @@
             }
             animate();
         })();
+        
+        // ====================
+        // OpenAI Realtime WebRTC - Auto start on load
+        // ====================
+        async function startOpenAIRealtime() {
+            try {
+                const pc = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                });
+                pc.addTransceiver('audio', { direction: 'sendrecv' });
+
+                const remoteAudioEl = document.createElement('audio');
+                remoteAudioEl.autoplay = true;
+                remoteAudioEl.playsInline = true;
+                remoteAudioEl.muted = false;
+                remoteAudioEl.volume = 1.0;
+                remoteAudioEl.crossOrigin = 'anonymous';
+                remoteAudioEl.style.display = 'none';
+                document.body.appendChild(remoteAudioEl);
+                const ensurePlayback = async () => {
+                    try { await remoteAudioEl.play(); } catch (err) {
+                        console.warn('Autoplay blocked, requesting user gesture to start audio');
+                        const prompt = document.createElement('div');
+                        prompt.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;';
+                        const btn = document.createElement('button');
+                        btn.textContent = 'Enable Audio';
+                        btn.style.cssText = 'padding:14px 22px;border-radius:10px;border:none;background:#4caf50;color:#fff;font-size:16px;cursor:pointer;';
+                        btn.onclick = async () => { try { await remoteAudioEl.play(); } finally { prompt.remove(); } };
+                        prompt.appendChild(btn); document.body.appendChild(prompt);
+                    }
+                };
+
+                pc.ontrack = (event) => {
+                    const [stream] = event.streams;
+                    if (stream) {
+                        console.log('Received remote track with', stream.getAudioTracks().length, 'audio tracks');
+                        remoteAudioEl.srcObject = stream;
+                        ensurePlayback();
+                    }
+                };
+
+                pc.oniceconnectionstatechange = () => console.log('ICE state:', pc.iceConnectionState);
+                pc.onconnectionstatechange = () => console.log('PC state:', pc.connectionState);
+
+                let dcResolve;
+                const dataChannelReady = new Promise((resolve) => { dcResolve = resolve; });
+                const dc = pc.createDataChannel('oai-events');
+                dc.onopen = () => dcResolve();
+
+                // Mic
+                try {
+                    const mic = await navigator.mediaDevices.getUserMedia({
+                        audio: { echoCancellation: true, noiseSuppression: true },
+                        video: false
+                    });
+                    for (const track of mic.getAudioTracks()) {
+                        pc.addTrack(track, mic);
+                    }
+                } catch (e) {
+                    console.warn('Microphone permission error:', e);
+                }
+
+                // Create offer and wait for ICE gathering to complete before sending
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                const waitForIce = new Promise((resolve) => {
+                    if (pc.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const check = () => {
+                            if (pc.iceGatheringState === 'complete') {
+                                pc.removeEventListener('icegatheringstatechange', check);
+                                resolve();
+                            }
+                        };
+                        pc.addEventListener('icegatheringstatechange', check);
+                        // Fallback timeout
+                        setTimeout(() => {
+                            pc.removeEventListener('icegatheringstatechange', check);
+                            resolve();
+                        }, 3000);
+                    }
+                });
+                await waitForIce;
+
+                const localSdp = pc.localDescription && pc.localDescription.sdp ? pc.localDescription.sdp : offer.sdp;
+
+                // Use ephemeral token to talk to OpenAI Realtime directly from the browser
+                let token = window.OPENAI_EPHEMERAL_TOKEN;
+                const model = window.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview';
+                if (!token) {
+                    try {
+                        const minted = await fetch('/realtime/token', { method: 'POST' }).then(r => r.json());
+                        token = minted && minted.token;
+                    } catch (_) {}
+                }
+                if (!token) throw new Error('No ephemeral token available');
+
+                const sdpAnswer = await fetch(`https://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/sdp',
+                        'Accept': 'application/sdp',
+                        'OpenAI-Beta': 'realtime=v1'
+                    },
+                    body: localSdp
+                }).then(r => r.text());
+
+                if (!sdpAnswer || !/^v=0/m.test(sdpAnswer)) {
+                    console.error('Invalid SDP answer from server:', sdpAnswer?.slice(0, 200));
+                    throw new Error('Invalid SDP answer');
+                }
+
+                await pc.setRemoteDescription({ type: 'answer', sdp: sdpAnswer });
+
+                await dataChannelReady;
+
+                // Configure the session: voice + enable server-side VAD and transcription
+                const sessionUpdate = { 
+                    type: 'session.update', 
+                    session: { 
+                        voice: 'alloy',
+                        modalities: ['text','audio'],
+                        input_audio_transcription: { model: 'whisper-1' },
+                        turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 }
+                    } 
+                };
+                dc.send(JSON.stringify(sessionUpdate));
+
+                const sayTest = {
+                    type: 'response.create',
+                    response: {
+                        modalities: ['audio'],
+                        audio: { voice: 'alloy' },
+                        instructions: 'Hello! This is a realtime voice test. How can I help you today?'
+                    }
+                };
+                dc.send(JSON.stringify(sayTest));
+
+                // If we don't receive a remote track shortly, retry the greeting once
+                setTimeout(() => {
+                    if (!remoteAudioEl.srcObject) {
+                        console.log('No remote audio yet, retrying greeting');
+                        dc.send(JSON.stringify(sayTest));
+                    }
+                }, 1500);
+            } catch (err) {
+                console.error('Failed to start OpenAI Realtime:', err);
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            // Attempt autoplay; browser may require allowing autoplay in site settings
+            startOpenAIRealtime();
+        });
     </script>
 </body>
 </html>
