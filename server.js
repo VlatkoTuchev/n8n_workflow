@@ -1,50 +1,23 @@
 const express = require('express');
-const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
-const cors = require('cors');
-
-const API = 'https://tavusapi.com/v2';
-const API_KEY = 'b6e8a92c4e0f46468e56d19d3305d56e';
+const path = require('path');
 
 const app = express();
-app.use(cors({ origin: true }));
 app.use(express.json());
 
-app.post('/api/conversations', async (req, res) => {
-  const r = await fetch(`${API}/conversations`, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json','x-api-key': API_KEY},
-    body: JSON.stringify(req.body)
-  });
-  const t = await r.text();
-  res.status(r.status).send(t);
+// Serve the entire workspace statically so GLB and HTML can be loaded via HTTP
+app.use(express.static(__dirname));
+
+// Default route to open the companion page easily
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'compenion_ai.html'));
 });
 
-// Generic proxy: forwards any /api/* to Tavus v2 with API key
-app.use('/api', async (req, res) => {
-  const targetUrl = `${API}${req.originalUrl.replace(/^\/api/, '')}`;
-  try {
-    const r = await fetch(targetUrl, {
-      method: req.method,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': API_KEY
-      },
-      body: ['GET','HEAD','DELETE'].includes(req.method) ? undefined : JSON.stringify(req.body)
-    });
-    const text = await r.text();
-    res.status(r.status).send(text);
-  } catch (e) {
-    res.status(500).send(String(e));
-  }
+// Simple local webhook fallback to make Jarvis respond even without n8n configured
+app.post('/webhook', (req, res) => {
+  const message = (req.body && req.body.message) || '';
+  const reply = message ? `You said: ${message}` : 'Hello! I am listening.';
+  res.json({ response: reply });
 });
 
-app.delete('/api/conversations/:id', async (req, res) => {
-  const r = await fetch(`${API}/conversations/${req.params.id}`, {
-    method: 'DELETE',
-    headers: {'x-api-key': API_KEY}
-  });
-  const t = await r.text();
-  res.status(r.status).send(t);
-});
-
-app.listen(4000, () => console.log('Proxy on http://localhost:4000'));
+const PORT = process.env.PORT || 4400;
+app.listen(PORT, () => console.log(`Static server running at http://localhost:${PORT}`));
