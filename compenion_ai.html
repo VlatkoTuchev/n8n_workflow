@@ -232,16 +232,24 @@
 
             let avatarRoot = null;
             let animationMixer = null;
-            const nameToAction = {};
             let currentAction = null;
 
-            function crossFadeTo(actionName, fade = 0.4) {
+            // Root + mixer + actions for each mode (share same skeleton)
+            let walkRoot = null, walkClip = null;
+            let danceClip = null;
+            let boxingClip = null;
+            const nameToAction = {};
+            function crossFadeTo(actionName, fade = 0.35) {
                 const next = nameToAction[actionName];
-                if (!next || currentAction === next) return;
+                if (!next) return;
+                if (currentAction === next) return;
                 next.reset().fadeIn(fade).play();
                 if (currentAction) currentAction.fadeOut(fade);
                 currentAction = next;
             }
+            let pendingMode = null;
+
+            // no-op (legacy kept for clarity)
 
             function normalizeAndGroundModel(root) {
                 try {
@@ -290,27 +298,19 @@
             }
 
             const bounds = { minX: -6.0, maxX: 6.0, minY: -1.5, maxY: 3.0 };
-            let velocityX = 0.0;
-            let behavior = 'idle';
-            let behaviorUntil = 0;
+            let velocityX = 0.4; // default walking speed
+            let behavior = 'walk';
 
             let isMouseDraggingAvatar = false;
             let dragLastClientX = 0;
             let dragLastClientY = 0;
 
-            function chooseNextBehavior(now) {
-                const r = Math.random();
-                if (r < 0.6) { behavior = 'walk'; velocityX = (Math.random() < 0.5 ? -1 : 1) * (0.35 + Math.random() * 0.25); crossFadeTo('walk'); }
-                else if (r < 0.85) { behavior = 'dance'; velocityX = 0; crossFadeTo('dance'); }
-                else { behavior = 'boxing'; velocityX = 0; crossFadeTo('boxing'); }
-                behaviorUntil = now + 3000 + Math.random() * 5000;
-            }
+            // No random behavior changes. The avatar walks by default.
 
             function updateAutonomy(deltaMs) {
                 if (!avatarRoot) return;
                 if (isMouseDraggingAvatar) { setFacingByDirection(0); return; }
-                const now = performance.now();
-                if (now > behaviorUntil) chooseNextBehavior(now);
+                // Keep current behavior until changed by a tool call
                 if (behavior === 'walk') {
                     avatarRoot.position.x += (deltaMs / 1000) * velocityX;
                     if (avatarRoot.position.x < bounds.minX) { avatarRoot.position.x = bounds.minX; velocityX = Math.abs(velocityX); }
@@ -319,6 +319,13 @@
                 } else {
                     setFacingByDirection(0);
                 }
+            }
+
+            function startWalking() {
+                behavior = 'walk';
+                velocityX = 0.4;
+                if (nameToAction.walk) crossFadeTo('walk');
+                else pendingMode = 'walk';
             }
 
             (function enableAvatarDragging() {
@@ -376,19 +383,30 @@
             loader.load(
                 assetsBase + modelFiles.walk,
                 (gltf) => {
-                    avatarRoot = gltf.scene; avatarRoot.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
-                    normalizeAndGroundModel(avatarRoot); scene.add(avatarRoot);
-                    animationMixer = new AnimationMixer(avatarRoot);
-                    if (gltf.animations && gltf.animations[0]) nameToAction.walk = animationMixer.clipAction(gltf.animations[0]);
+                    walkRoot = gltf.scene; walkRoot.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
+                    normalizeAndGroundModel(walkRoot); scene.add(walkRoot);
+                    animationMixer = new AnimationMixer(walkRoot);
+                    if (gltf.animations && gltf.animations[0]) walkClip = gltf.animations[0];
+                    avatarRoot = walkRoot; 
+                    nameToAction.walk = animationMixer.clipAction(walkClip);
+                    currentAction = nameToAction.walk; currentAction.play();
                     const toLoad = [
                         { key: 'dance', file: modelFiles.dance },
                         { key: 'boxing', file: modelFiles.boxing }
                     ];
                     let loaded = 0;
                     toLoad.forEach(({ key, file }) => loader.load(assetsBase + file, (agltf) => {
-                        if (agltf.animations && agltf.animations.length) nameToAction[key] = animationMixer.clipAction(agltf.animations[0]);
-                        loaded++; if (loaded === toLoad.length) { chooseNextBehavior(performance.now()); }
-                    }, undefined, () => { loaded++; if (loaded === toLoad.length) { chooseNextBehavior(performance.now()); } }));
+                        const clip = (agltf.animations && agltf.animations[0]) || null;
+                        if (!clip) { loaded++; return; }
+                        if (key === 'dance') danceClip = clip;
+                        if (key === 'boxing') boxingClip = clip;
+                        // Create actions on the SAME mixer/root so we can crossfade
+                        if (animationMixer) {
+                            nameToAction[key] = animationMixer.clipAction(clip);
+                            if (pendingMode === key) { crossFadeTo(key); pendingMode = null; }
+                        }
+                        loaded++;
+                    }, undefined, () => { loaded++; }));
                     onResize(); animate();
                 },
                 undefined,
@@ -402,6 +420,34 @@
                 updateAutonomy(dt); renderer.render(scene, camera); requestAnimationFrame(animate);
             }
             animate();
+
+            // Expose safe control functions for external callers (Realtime tools)
+            // These methods close over the internal avatar state but are accessible via window.
+            window.AvatarController = {
+                setWalk: () => {
+                    startWalking();
+                },
+                setDance: () => {
+                    behavior = 'dance';
+                    velocityX = 0;
+                    if (nameToAction.dance) {
+                        crossFadeTo('dance');
+                    } else {
+                        pendingMode = 'dance';
+                        console.log('Dance clip not ready yet, will switch when loaded');
+                    }
+                },
+                setFight: () => {
+                    behavior = 'boxing';
+                    velocityX = 0;
+                    if (nameToAction.boxing) {
+                        crossFadeTo('boxing');
+                    } else {
+                        pendingMode = 'boxing';
+                        console.log('Boxing clip not ready yet, will switch when loaded');
+                    }
+                }
+            };
         })();
         
         // ====================
@@ -524,24 +570,92 @@
 
                 await dataChannelReady;
 
-                // Configure the session: voice + enable server-side VAD and transcription
-                const sessionUpdate = { 
-                    type: 'session.update', 
-                    session: { 
+                // Tools to control the avatar from the model
+                const tools = [
+                    {
+                        type: 'function',
+                        name: 'set_walk',
+                        description: 'Switch the 3D avatar to walking animation',
+                        parameters: { type: 'object', properties: {}, additionalProperties: false },
+                    },
+                    {
+                        type: 'function',
+                        name: 'set_dance',
+                        description: 'Switch the 3D avatar to dancing animation',
+                        parameters: { type: 'object', properties: {}, additionalProperties: false },
+                    },
+                    {
+                        type: 'function',
+                        name: 'set_fight',
+                        description: 'Switch the 3D avatar to boxing/fighting animation',
+                        parameters: { type: 'object', properties: {}, additionalProperties: false },
+                    }
+                ];
+
+                // Configure the session: voice, transcription, VAD, and tools
+                dc.send(JSON.stringify({
+                    type: 'session.update',
+                    session: {
                         voice: 'alloy',
                         modalities: ['text','audio'],
                         input_audio_transcription: { model: 'whisper-1' },
-                        turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 }
-                    } 
+                        turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
+                        tools,
+                        tool_choice: 'auto',
+                        instructions: 'You are controlling a single on-screen avatar. When the user asks you to dance, call the set_dance tool. When the user asks you to fight/box, call the set_fight tool. When they say walk or resume, call set_walk. Keep replies brief and confirm actions in speech.'
+                    }
+                }));
+
+                // Tool call handler from the assistant
+                let isResponseActive = false;
+                const toolHandler = (evt) => {
+                    try {
+                        const msg = JSON.parse(evt.data);
+                        if (msg && msg.type) {
+                            console.log('[Realtime msg]', msg.type, msg.name || '', msg.call_id || '');
+                        }
+                        if (msg.type === 'error') {
+                            console.error('Realtime error payload:', msg);
+                        }
+                        if (msg.type === 'response.created') { isResponseActive = true; }
+                        if (msg.type === 'response.done') { isResponseActive = false; }
+                        // On VAD stop, ask the model to respond so it can choose tools
+                        // Many models auto-create a response on VAD stop already; avoid double-creating
+                        // if (msg.type === 'input_audio_buffer.speech_stopped' && !isResponseActive) {
+                        //     dc.send(JSON.stringify({ type: 'response.create' }));
+                        // }
+                        const isFuncDone =
+                            msg.type === 'response.function_call_arguments.done' ||
+                            msg.type === 'response.tool_call.arguments.done' ||
+                            msg.type === 'response.tool_call.done' ||
+                            (msg.type === 'response.output_item.done' && msg.item && (msg.item.type === 'function_call' || msg.item.type === 'tool_call'));
+                        if (isFuncDone) {
+                            const name = msg.name || (msg.item && msg.item.name) || '';
+                            console.log('[Tool call]', name);
+                            if (name === 'set_walk' && window.AvatarController?.setWalk) { window.AvatarController.setWalk(); }
+                            if (name === 'set_dance' && window.AvatarController?.setDance) { window.AvatarController.setDance(); }
+                            if (name === 'set_fight' && window.AvatarController?.setFight) { window.AvatarController.setFight(); }
+                            // Confirm tool execution back to model
+                            const callId = msg.call_id || (msg.item && (msg.item.call_id || msg.item.id)) || msg.tool_call_id || msg.id || undefined;
+                            dc.send(JSON.stringify({
+                                type: 'conversation.item.create',
+                                item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok: true }) }
+                            }));
+                            // Only request a new response if one isn't already active
+                            if (!isResponseActive) {
+                                dc.send(JSON.stringify({ type: 'response.create' }));
+                            }
+                        }
+                    } catch (_) {}
                 };
-                dc.send(JSON.stringify(sessionUpdate));
+                dc.addEventListener('message', toolHandler);
 
                 const sayTest = {
                     type: 'response.create',
                     response: {
                         modalities: ['audio'],
                         audio: { voice: 'alloy' },
-                        instructions: 'Hello! This is a realtime voice test. How can I help you today?'
+                        instructions: 'Hello! I can control the avatar. Ask me to walk, dance, or fight.'
                     }
                 };
                 dc.send(JSON.stringify(sayTest));
