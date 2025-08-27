@@ -487,7 +487,15 @@
                     const [stream] = event.streams;
                     if (stream) {
                         console.log('Received remote track with', stream.getAudioTracks().length, 'audio tracks');
-                        remoteAudioEl.srcObject = stream;
+                        // Force attach the first audio track to ensure audio renders
+                        const audioTracks = stream.getAudioTracks();
+                        if (audioTracks && audioTracks.length > 0) {
+                            const forced = new MediaStream();
+                            forced.addTrack(audioTracks[0]);
+                            remoteAudioEl.srcObject = forced;
+                        } else {
+                            remoteAudioEl.srcObject = stream;
+                        }
                         ensurePlayback();
                     }
                 };
@@ -499,6 +507,8 @@
                 const dataChannelReady = new Promise((resolve) => { dcResolve = resolve; });
                 const dc = pc.createDataChannel('oai-events');
                 dc.onopen = () => dcResolve();
+                dc.onerror = (e) => console.warn('DataChannel error:', e);
+                dc.onclose = () => console.log('DataChannel closed');
 
                 // Mic
                 try {
@@ -539,25 +549,10 @@
 
                 const localSdp = pc.localDescription && pc.localDescription.sdp ? pc.localDescription.sdp : offer.sdp;
 
-                // Use ephemeral token to talk to OpenAI Realtime directly from the browser
-                let token = window.OPENAI_EPHEMERAL_TOKEN;
-                const model = window.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview';
-                if (!token) {
-                    try {
-                        const minted = await fetch('/realtime/token', { method: 'POST' }).then(r => r.json());
-                        token = minted && minted.token;
-                    } catch (_) {}
-                }
-                if (!token) throw new Error('No ephemeral token available');
-
-                const sdpAnswer = await fetch(`https://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`, {
+                // Prefer server-side SDP exchange proxy (avoids CORS and header pitfalls)
+                const sdpAnswer = await fetch('/realtime/sdp', {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/sdp',
-                        'Accept': 'application/sdp',
-                        'OpenAI-Beta': 'realtime=v1'
-                    },
+                    headers: { 'Content-Type': 'application/sdp', 'Accept': 'application/sdp' },
                     body: localSdp
                 }).then(r => r.text());
 
@@ -589,62 +584,168 @@
                         name: 'set_fight',
                         description: 'Switch the 3D avatar to boxing/fighting animation',
                         parameters: { type: 'object', properties: {}, additionalProperties: false },
+                    },
+                    {
+                        type: 'function',
+                        name: 'retrieve_memories',
+                        description: 'Retrieve personalized knowledge for the current user from the vector DB',
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                userId: { type: 'string', description: 'UUID of the current user' },
+                                queryText: { type: 'string', description: 'Natural language query to search' },
+                                topK: { type: 'number', description: 'Max results to return (1-20)' },
+                                kind: { type: 'string', enum: ['personal','learning','task','kb'], description: 'Optional memory namespace' }
+                            },
+                            required: ['userId','queryText'],
+                            additionalProperties: false
+                        }
+                    },
+                    {
+                        type: 'function',
+                        name: 'save_memory',
+                        description: 'Store a new memory for the current user in the vector DB',
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                userId: { type: 'string', description: 'UUID of the current user' },
+                                kind: { type: 'string', enum: ['personal','learning','task','kb'] },
+                                text: { type: 'string', description: 'Text to embed and store' },
+                                metadata: { type: 'object', description: 'Optional metadata object' }
+                            },
+                            required: ['userId','kind','text'],
+                            additionalProperties: true
+                        }
                     }
                 ];
 
-                // Configure the session: voice, transcription, VAD, and tools
+                // Configure the session: voice, VAD, transcription, and tools
                 dc.send(JSON.stringify({
                     type: 'session.update',
                     session: {
                         voice: 'alloy',
-                        modalities: ['text','audio'],
-                        input_audio_transcription: { model: 'whisper-1' },
-                        turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
+                        modalities: ['audio','text'],
                         tools,
                         tool_choice: 'auto',
-                        instructions: 'You are controlling a single on-screen avatar. When the user asks you to dance, call the set_dance tool. When the user asks you to fight/box, call the set_fight tool. When they say walk or resume, call set_walk. Keep replies brief and confirm actions in speech.'
+                        input_audio_transcription: { model: 'gpt-4o-mini-transcribe' },
+                        turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 600 },
+                        instructions: 'You are controlling a single on-screen avatar. When the user says walk or resume, call set_walk. When they say dance, call set_dance. When they say fight or box, call set_fight. Always speak your confirmation aloud in a short sentence.'
                     }
                 }));
 
                 // Tool call handler from the assistant
                 let isResponseActive = false;
-                const toolHandler = (evt) => {
+                // Simple local user identity (replace with real auth later)
+                function getOrCreateUserId() {
+                    const KEY = 'companion_user_id';
+                    let id = localStorage.getItem(KEY);
+                    if (!id) {
+                        id = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+                            (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+                        );
+                        localStorage.setItem(KEY, id);
+                    }
+                    return id;
+                }
+
+                // Accumulate streamed tool/function arguments by call_id
+                const pendingArgs = Object.create(null);
+
+                const toolHandler = async (evt) => {
                     try {
                         const msg = JSON.parse(evt.data);
                         if (msg && msg.type) {
-                            console.log('[Realtime msg]', msg.type, msg.name || '', msg.call_id || '');
+                            const n = msg.name || (msg.item && msg.item.name) || '';
+                            const c = msg.call_id || (msg.item && (msg.item.call_id || msg.item.id)) || msg.tool_call_id || msg.id || '';
+                            console.log('[Realtime msg]', msg.type, n, c);
+                        }
+                        if (msg.type === 'response.output_text.delta') {
+                            const t = (msg.delta || msg.text || '').toString();
+                            if (t) console.log('[Text Δ]', t);
+                        }
+                        if (msg.type === 'response.output_audio.delta') {
+                            const b64 = msg.delta || '';
+                            if (b64) console.log('[Audio Δ] bytes=', b64.length);
+                        }
+                        if (msg.type === 'response.error') {
+                            console.warn('[Response error]', msg);
                         }
                         if (msg.type === 'error') {
                             console.error('Realtime error payload:', msg);
+                            try { console.error('Realtime error JSON:', JSON.stringify(msg)); } catch (_) {}
                         }
                         if (msg.type === 'response.created') { isResponseActive = true; }
                         if (msg.type === 'response.done') { isResponseActive = false; }
-                        // On VAD stop, ask the model to respond so it can choose tools
-                        // Many models auto-create a response on VAD stop already; avoid double-creating
-                        // if (msg.type === 'input_audio_buffer.speech_stopped' && !isResponseActive) {
-                        //     dc.send(JSON.stringify({ type: 'response.create' }));
-                        // }
+
+                        // Collect streamed arguments
+                        if (msg.type === 'response.function_call.arguments.delta' || msg.type === 'response.tool_call.arguments.delta') {
+                            const callId = msg.call_id || (msg.item && (msg.item.call_id || msg.item.id)) || msg.tool_call_id || msg.id || undefined;
+                            const chunk = msg.delta || (msg.arguments && (msg.arguments.delta || msg.arguments)) || '';
+                            if (callId && chunk) {
+                                pendingArgs[callId] = (pendingArgs[callId] || '') + String(chunk);
+                            }
+                        }
+                        // On VAD stop or completed transcript, ask the model to respond out loud
+                        if ((msg.type === 'input_audio_buffer.speech_stopped' || msg.type === 'conversation.item.input_audio_transcription.completed') && !isResponseActive) {
+                            // Two-step prompt, per Realtime guide: add input_text item, then request a response
+                            dc.send(JSON.stringify({
+                                type: 'conversation.item.create',
+                                item: { type: 'input_text', text: 'Please answer out loud in one brief sentence.' }
+                            }));
+                            dc.send(JSON.stringify({ type: 'response.create' }));
+                        }
                         const isFuncDone =
-                            msg.type === 'response.function_call_arguments.done' ||
+                            msg.type === 'response.tool_call' ||
                             msg.type === 'response.tool_call.arguments.done' ||
                             msg.type === 'response.tool_call.done' ||
+                            msg.type === 'response.function_call' ||
+                            msg.type === 'response.function_call.arguments.done' ||
                             (msg.type === 'response.output_item.done' && msg.item && (msg.item.type === 'function_call' || msg.item.type === 'tool_call'));
                         if (isFuncDone) {
                             const name = msg.name || (msg.item && msg.item.name) || '';
+                            const callId = msg.call_id || (msg.item && (msg.item.call_id || msg.item.id)) || msg.tool_call_id || msg.id || undefined;
                             console.log('[Tool call]', name);
+
+                            // Default: local avatar controls
                             if (name === 'set_walk' && window.AvatarController?.setWalk) { window.AvatarController.setWalk(); }
                             if (name === 'set_dance' && window.AvatarController?.setDance) { window.AvatarController.setDance(); }
                             if (name === 'set_fight' && window.AvatarController?.setFight) { window.AvatarController.setFight(); }
-                            // Confirm tool execution back to model
-                            const callId = msg.call_id || (msg.item && (msg.item.call_id || msg.item.id)) || msg.tool_call_id || msg.id || undefined;
+
+                            // DB-backed tools
+                            if (name === 'retrieve_memories' || name === 'save_memory') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {};
+                                try { if (argStr && typeof argStr === 'string') { args = JSON.parse(argStr); } } catch (_) { args = {}; }
+                                if (!args.userId) { args.userId = getOrCreateUserId(); }
+                                if (name === 'retrieve_memories' && (args.topK == null)) { args.topK = 6; }
+                                try {
+                                    const resp = await fetch('/tools/execute', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ name, arguments: args })
+                                    }).then(r => r.json());
+                                    dc.send(JSON.stringify({
+                                        type: 'conversation.item.create',
+                                        item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(resp) }
+                                    }));
+                                } catch (e) {
+                                    dc.send(JSON.stringify({
+                                        type: 'conversation.item.create',
+                                        item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok: false, error: 'server_call_failed' }) }
+                                    }));
+                                } finally {
+                                    if (callId) delete pendingArgs[callId];
+                                }
+                                if (!isResponseActive) { dc.send(JSON.stringify({ type: 'response.create' })); }
+                                return;
+                            }
+
+                            // Confirm local tool execution back to model
                             dc.send(JSON.stringify({
                                 type: 'conversation.item.create',
                                 item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok: true }) }
                             }));
-                            // Only request a new response if one isn't already active
-                            if (!isResponseActive) {
-                                dc.send(JSON.stringify({ type: 'response.create' }));
-                            }
+                            if (!isResponseActive) { dc.send(JSON.stringify({ type: 'response.create' })); }
                         }
                     } catch (_) {}
                 };
@@ -652,11 +753,7 @@
 
                 const sayTest = {
                     type: 'response.create',
-                    response: {
-                        modalities: ['audio'],
-                        audio: { voice: 'alloy' },
-                        instructions: 'Hello! I can control the avatar. Ask me to walk, dance, or fight.'
-                    }
+                    response: { modalities: ['audio','text'], instructions: 'Hello! I am ready. Ask me to walk, dance, or fight.' }
                 };
                 dc.send(JSON.stringify(sayTest));
 

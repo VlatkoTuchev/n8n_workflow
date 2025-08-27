@@ -2,6 +2,9 @@ const express = require('express');
 const path = require('path');
 const cors = require('cors');
 require('dotenv').config();
+const { query } = require('./db');
+const { redis, connectRedis } = require('./redis');
+const { retrieveMemories, saveMemory } = require('./retrieval');
 
 const app = express();
 app.use(cors());
@@ -86,6 +89,46 @@ app.all('/realtime/token', async (_req, res) => {
   }
 });
 
+// Health check for Postgres and Redis
+app.get('/health', async (_req, res) => {
+  try {
+    await connectRedis();
+    const pong = await redis.ping();
+    const result = await query('SELECT now() AS now');
+    const dbTime = result && result.rows && result.rows[0] ? result.rows[0].now : null;
+    res.json({ ok: true, redis: pong, dbTime });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Tool execution endpoint for DB-backed retrieval and memory writes
+app.post('/tools/execute', async (req, res) => {
+  try {
+    const { name, arguments: args } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Missing tool name' });
+
+    if (name === 'retrieve_memories') {
+      const { userId, queryText, topK, kind } = args || {};
+      if (!userId || !queryText) return res.status(400).json({ error: 'userId and queryText are required' });
+      const rows = await retrieveMemories({ userId, queryText, topK, kind });
+      return res.json({ ok: true, results: rows });
+    }
+
+    if (name === 'save_memory') {
+      const { userId, kind, text, metadata } = args || {};
+      if (!userId || !kind || !text) return res.status(400).json({ error: 'userId, kind and text are required' });
+      const out = await saveMemory({ userId, kind, text, metadata });
+      return res.json({ ok: true, id: out.id });
+    }
+
+    return res.status(404).json({ error: 'Unknown tool' });
+  } catch (e) {
+    console.error('Tool execute error:', e);
+    res.status(500).json({ error: 'Tool execution failed', detail: e.message });
+  }
+});
+
 // Serve node_modules for browser ESM imports (read-only)
 app.use('/node_modules', express.static(path.join(__dirname, 'node_modules')));
 
@@ -97,7 +140,6 @@ app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'compenion_ai.html'));
 });
 
-// Simple local webhook fallback to make Jarvis respond even without n8n configured
 app.post('/webhook', (req, res) => {
   const message = (req.body && req.body.message) || '';
   const reply = message ? `You said: ${message}` : 'Hello! I am listening.';

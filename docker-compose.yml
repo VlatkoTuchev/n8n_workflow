@@ -1,0 +1,27 @@
+version: "3.9"
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: compenion_ai_pg
+    environment:
+      POSTGRES_USER: compenion_ai
+      POSTGRES_PASSWORD: compenion_ai
+      POSTGRES_DB: compenion_ai
+    ports:
+      - "5432:5432"
+    volumes:
+      - compenion_ai_db_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  redis:
+    image: redis:7-alpine
+    container_name: compenion_ai_redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - compenion_ai_redis_data:/data
+
+volumes:
+  compenion_ai_db_data:
+  compenion_ai_redis_data:
