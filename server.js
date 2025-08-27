@@ -3,8 +3,20 @@ const path = require('path');
 const cors = require('cors');
 require('dotenv').config();
 const { query } = require('./db');
-const { redis, connectRedis } = require('./redis');
-const { retrieveMemories, saveMemory } = require('./retrieval');
+const { redis, connectRedis, addChatTurn, getRecentChat } = require('./redis');
+const {
+  retrieveMemories,
+  saveMemory,
+  editMemory,
+  setPreferredLanguage,
+  readPreferredLanguage,
+  addSpokenLanguage,
+  createUser,
+  createKb,
+  kbAddText,
+  retrieveKb,
+  createChatSession
+} = require('./retrieval');
 
 const app = express();
 app.use(cors());
@@ -102,30 +114,150 @@ app.get('/health', async (_req, res) => {
   }
 });
 
-// Tool execution endpoint for DB-backed retrieval and memory writes
+// Tool execution endpoint (user memory + KB + preferences)
 app.post('/tools/execute', async (req, res) => {
   try {
     const { name, arguments: args } = req.body || {};
-    if (!name) return res.status(400).json({ error: 'Missing tool name' });
+    const toolName = String(name || '').trim();
+    if (!toolName) return res.status(400).json({ error: 'Missing tool name' });
+    
+    // Lightweight observability to troubleshoot client → server tool calls
+    try { console.log('[tools/execute]', toolName, Object.keys(args || {})); } catch (_) {}
 
-    if (name === 'retrieve_memories') {
+    // Users
+    if (toolName === 'create_user') {
+      const { email } = args || {};
+      if (!email) return res.status(400).json({ error: 'email is required' });
+      const out = await createUser({ email });
+      return res.json({ ok: true, id: out.id });
+    }
+
+    // Knowledge base
+    if (toolName === 'create_kb') {
+      const { ownerUserId, name: kbName, visibility } = args || {};
+      if (!kbName) return res.status(400).json({ error: 'name is required' });
+      const out = await createKb({ ownerUserId, name: kbName, visibility });
+      return res.json({ ok: true, id: out.id });
+    }
+
+    if (toolName === 'kb_add_text') {
+      const { kbId, title, text, mimeType, metadata } = args || {};
+      if (!kbId || !text) return res.status(400).json({ error: 'kbId and text are required' });
+      const out = await kbAddText({ kbId, title, text, mimeType, metadata });
+      return res.json({ ok: true, ...out });
+    }
+
+    if (toolName === 'retrieve_kb') {
+      const { kbId, queryText, topK } = args || {};
+      if (!kbId || !queryText) return res.status(400).json({ error: 'kbId and queryText are required' });
+      const rows = await retrieveKb({ kbId, queryText, topK });
+      return res.json({ ok: true, results: rows });
+    }
+
+    if (toolName === 'create_chat_session') {
+      const { userId, title } = args || {};
+      const out = await createChatSession({ userId, title });
+      return res.json({ ok: true, id: out.id });
+    }
+
+    // User memory
+    if (toolName === 'retrieve_memories') {
       const { userId, queryText, topK, kind } = args || {};
       if (!userId || !queryText) return res.status(400).json({ error: 'userId and queryText are required' });
       const rows = await retrieveMemories({ userId, queryText, topK, kind });
       return res.json({ ok: true, results: rows });
     }
 
-    if (name === 'save_memory') {
+    if (toolName === 'save_memory') {
       const { userId, kind, text, metadata } = args || {};
       if (!userId || !kind || !text) return res.status(400).json({ error: 'userId, kind and text are required' });
+
+      // If the payload is actually updating preferred_language, route to upsert logic instead of inserting duplicates
+      const metaLang = metadata && typeof metadata === 'object' ? (metadata.preferred_language || metadata.preferredLanguage) : undefined;
+      let textLang = undefined;
+      try {
+        const m = String(text || '').match(/preferred[_\s-]?language\s*[:=]\s*([A-Za-zÀ-ÖØ-öø-ÿ\- ]{2,30})/i);
+        if (m && m[1]) textLang = m[1].trim();
+      } catch (_) {}
+
+      const inferredLang = String(metaLang || textLang || '').trim();
+      if (inferredLang) {
+        const out = await setPreferredLanguage({ userId, language: inferredLang });
+        return res.json({ ok: true, id: out.id, upserted: 'preferred_language' });
+      }
+
       const out = await saveMemory({ userId, kind, text, metadata });
       return res.json({ ok: true, id: out.id });
     }
 
-    return res.status(404).json({ error: 'Unknown tool' });
+    if (toolName === 'edit_memory') {
+      const { id, userId, text, kind, metadata } = args || {};
+      if (!id || !userId) return res.status(400).json({ error: 'id and userId are required' });
+      const out = await editMemory({ id, userId, text, kind, metadata });
+      return res.json({ ok: true, id: out.id });
+    }
+
+    if (toolName === 'set_preferred_language' || toolName === 'setPreferredLanguage') {
+      const { userId, language } = args || {};
+      if (!userId || !language) return res.status(400).json({ error: 'userId and language are required' });
+      const out = await setPreferredLanguage({ userId, language });
+      return res.json({ ok: true, id: out.id });
+    }
+
+    if (toolName === 'read_preferred_language' || toolName === 'readPreferredLanguage') {
+      const { userId } = args || {};
+      if (!userId) return res.status(400).json({ error: 'userId is required' });
+      const out = await readPreferredLanguage({ userId });
+      return res.json({ ok: true, language: out.language });
+    }
+
+    if (toolName === 'add_spoken_language' || toolName === 'addSpokenLanguage') {
+      const { userId, language } = args || {};
+      if (!userId || !language) return res.status(400).json({ error: 'userId and language are required' });
+      const out = await addSpokenLanguage({ userId, language });
+      return res.json({ ok: true, id: out.id });
+    }
+
+    if (toolName === 'add_chat_turn' || toolName === 'addChatTurn') {
+      const { sessionId, role, content } = args || {};
+      if (!sessionId || !role || !content) return res.status(400).json({ error: 'sessionId, role, content required' });
+      await addChatTurn(sessionId, role, content);
+      return res.json({ ok: true });
+    }
+
+    if (toolName === 'get_recent_chat' || toolName === 'getRecentChat') {
+      const { sessionId, n } = args || {};
+      if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+      const items = await getRecentChat(sessionId, n || 20);
+      return res.json({ ok: true, items });
+    }
+
+    return res.status(404).json({ error: 'Unknown tool', name: toolName });
   } catch (e) {
     console.error('Tool execute error:', e);
     res.status(500).json({ error: 'Tool execution failed', detail: e.message });
+  }
+});
+
+// Admin: delete memories for a user (or truncate all). Protected by ADMIN_TOKEN.
+app.post('/tools/admin/delete_memories', async (req, res) => {
+  try {
+    const adminToken = process.env.ADMIN_TOKEN;
+    const provided = req.headers['x-admin-token'] || (req.body && req.body.token);
+    if (!adminToken) return res.status(500).json({ error: 'ADMIN_TOKEN not configured' });
+    if (!provided || provided !== adminToken) return res.status(403).json({ error: 'Forbidden' });
+
+    const { userId, all } = req.body || {};
+    if (all === true) {
+      await query('TRUNCATE TABLE user_memory');
+      return res.json({ ok: true, deleted: 'all' });
+    }
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+    const result = await query('DELETE FROM user_memory WHERE user_id = $1', [userId]);
+    return res.json({ ok: true, deleted: result.rowCount || 0 });
+  } catch (e) {
+    console.error('Admin delete memories error:', e);
+    res.status(500).json({ error: 'Delete failed', detail: e.message });
   }
 });
 
@@ -145,7 +277,6 @@ app.post('/webhook', (req, res) => {
   const reply = message ? `You said: ${message}` : 'Hello! I am listening.';
   res.json({ response: reply });
 });
-
 
 const PORT = process.env.PORT || 4400;
 app.listen(PORT, () => console.log(`Static server running at http://localhost:${PORT}`));
