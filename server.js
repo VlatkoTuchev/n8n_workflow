@@ -17,11 +17,26 @@ const {
   retrieveKb,
   createChatSession
 } = require('./retrieval');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const cookieParser = require('cookie-parser');
+const mysqlDb = require('./mysql');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.text({ type: ['application/sdp', 'text/plain'] }));
+app.use(cookieParser());
+
+function signToken(payload) {
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
+}
+function authRequired(req, res, next) {
+  const token = (req.cookies && req.cookies.auth) || (req.headers.authorization || '').replace(/^Bearer\s+/,'');
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  try { req.user = jwt.verify(token, process.env.JWT_SECRET); return next(); }
+  catch { return res.status(401).json({ error: 'Invalid token' }); }
+}
 
 // Realtime WebRTC SDP exchange proxy to OpenAI (place before static routing)
 // Accept SDP over POST; respond with OpenAI's SDP answer
@@ -99,6 +114,109 @@ app.all('/realtime/token', async (_req, res) => {
     console.error('Token endpoint error:', err);
     res.status(500).json({ error: 'Token endpoint error' });
   }
+});
+
+// Register: creates MySQL registrant + user, and Postgres app_user (bridged)
+app.post('/auth/register', async (req, res) => {
+  try {
+    const { name, email, password, phone } = req.body || {};
+    if (!name || !email || !password) return res.status(400).json({ error: 'name, email, password required' });
+
+    // 1) Hash password
+    const hash = await bcrypt.hash(String(password), 10);
+
+    // 2) Ensure Postgres app_user exists (source of truth for identity)
+    const created = await createUser({ email }); // from retrieval.js
+    const pgUserId = created.id;
+
+    // 3) Upsert MySQL users (for login) and registrants (business record)
+    await mysqlDb.query(
+      `INSERT INTO users (name,email,password,created_at,updated_at)
+       VALUES (?,?,?,?,NOW())
+       ON DUPLICATE KEY UPDATE name=VALUES(name), password=VALUES(password), updated_at=NOW()`,
+      [name, email, hash, new Date()]
+    );
+
+    const rows = await mysqlDb.query(
+      `SELECT id FROM registrants WHERE email = ? LIMIT 1`,
+      [email]
+    );
+    if (rows.length === 0) {
+      await mysqlDb.query(
+        `INSERT INTO registrants (name,email,phone,additional_info,has_registered,created_at,updated_at)
+         VALUES (?,?,?,?,1,NOW(),NOW())`,
+        [name, email, phone || null, JSON.stringify({ source: 'ai_companion', pg_user_id: pgUserId })]
+      );
+    } else {
+      await mysqlDb.query(
+        `UPDATE registrants
+           SET name=?, phone=?, additional_info=JSON_SET(COALESCE(additional_info,'{}'),'$.pg_user_id', ?), updated_at=NOW()
+         WHERE id=?`,
+        [name, phone || null, pgUserId, rows[0].id]
+      );
+    }
+
+    // 4) Issue session
+    const token = signToken({ email, pgUserId });
+    const isProd = process.env.NODE_ENV === 'production';
+    res.cookie('auth', token, { httpOnly: true, sameSite: 'Lax', secure: isProd, maxAge: 7*24*3600*1000 });
+    return res.json({ ok: true, email, pgUserId });
+  } catch (e) {
+    console.error('register error', e);
+    res.status(500).json({ error: 'registration failed' });
+  }
+});
+
+// Login with MySQL users table
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'email and password required' });
+
+    const users = await mysqlDb.query(`SELECT id,name,email,password FROM users WHERE email=? LIMIT 1`, [email]);
+    if (users.length === 0) return res.status(401).json({ error: 'invalid credentials' });
+
+    const ok = await bcrypt.compare(String(password), users[0].password || '');
+    if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+
+    let pgUserId = null;
+    const reg = await mysqlDb.query(`SELECT id, additional_info FROM registrants WHERE email=? LIMIT 1`, [email]);
+    if (reg.length && reg[0].additional_info && reg[0].additional_info.pg_user_id) {
+      pgUserId = reg[0].additional_info.pg_user_id;
+    } else {
+      // create in Postgres and store link in MySQL
+      const created = await createUser({ email });
+      pgUserId = created.id;
+      if (reg.length) {
+        await mysqlDb.query(
+          `UPDATE registrants SET additional_info=JSON_SET(COALESCE(additional_info,'{}'),'$.pg_user_id', ?), updated_at=NOW() WHERE id=?`,
+          [pgUserId, reg[0].id]
+        );
+      } else {
+        await mysqlDb.query(
+          `INSERT INTO registrants (name,email,additional_info,has_registered,created_at,updated_at)
+           VALUES (?,?,JSON_OBJECT('pg_user_id', ?),1,NOW(),NOW())`,
+          [email.split('@')[0], email, pgUserId]
+        );
+      }
+    }
+
+    const token = signToken({ email, pgUserId });
+    const isProd = process.env.NODE_ENV === 'production';
+    res.cookie('auth', token, { httpOnly: true, sameSite: 'Lax', secure: isProd, maxAge: 7*24*3600*1000 });
+    return res.json({ ok: true, email, pgUserId });
+  } catch (e) {
+    console.error('login error', e);
+    res.status(500).json({ error: 'login failed' });
+  }
+});
+
+app.post('/auth/logout', (req, res) => {
+  res.clearCookie('auth'); res.json({ ok: true });
+});
+
+app.get('/me', authRequired, (req, res) => {
+  res.json({ ok: true, ...req.user });
 });
 
 // Health check for Postgres and Redis
@@ -267,9 +385,24 @@ app.use('/node_modules', express.static(path.join(__dirname, 'node_modules')));
 // Serve the entire workspace statically so GLB and HTML can be loaded via HTTP
 app.use(express.static(__dirname));
 
+// Friendly routes for explicit login/signup pages
+app.get('/login', (_req, res) => {
+  return res.sendFile(path.join(__dirname, 'login.html'));
+});
+
+app.get('/signup', (_req, res) => {
+  return res.sendFile(path.join(__dirname, 'signup.html'));
+});
+
 // Default route to open the companion page easily
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'compenion_ai.html'));
+app.get('/', (req, res) => {
+  try {
+    const token = (req.cookies && req.cookies.auth) || '';
+    jwt.verify(token, process.env.JWT_SECRET);
+    return res.sendFile(path.join(__dirname, 'compenion_ai.html'));
+  } catch {
+    return res.sendFile(path.join(__dirname, 'login.html'));
+  }
 });
 
 app.post('/webhook', (req, res) => {

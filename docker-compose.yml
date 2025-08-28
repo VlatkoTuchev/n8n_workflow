@@ -12,6 +12,11 @@ services:
     volumes:
       - compenion_ai_db_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_replication_slots=10
+      -c max_wal_senders=10
 
   redis:
     image: redis:7-alpine
@@ -22,6 +27,87 @@ services:
     volumes:
       - compenion_ai_redis_data:/data
 
+  mysql:
+    image: mysql:8.0
+    container_name: compenion_ai_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpwd
+      MYSQL_DATABASE: aiatwork
+      MYSQL_USER: ai_cdc
+      MYSQL_PASSWORD: ai_cdc_pwd
+    command: >
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog_format=ROW
+      --binlog_row_image=FULL
+      --gtid_mode=ON
+      --enforce_gtid_consistency=ON
+      --expire_logs_days=7
+      --default_authentication_plugin=mysql_native_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - compenion_ai_mysql_data:/var/lib/mysql
+      - ./db/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: compenion_ai_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: compenion_ai_kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+  connect:
+    build:
+      context: ./connect
+    container_name: compenion_ai_connect
+    depends_on:
+      - kafka
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_PORT: 8083
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_REST_ADVERTISED_PORT: 8083
+      CONNECT_GROUP_ID: "compose-connect-group"
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect-status"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components
+    volumes:
+      - connect_plugins:/usr/share/confluent-hub-components
+
 volumes:
   compenion_ai_db_data:
   compenion_ai_redis_data:
+  compenion_ai_mysql_data:
+  connect_plugins:

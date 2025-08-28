@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Create account</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/auth.css" />
+  <script src="/auth-bg.js" defer></script>
+</head>
+<body>
+  <canvas id="bg"></canvas>
+  <div class="card">
+    <h2>Create your account</h2>
+    <p class="sub">Register once. Your profile is linked to your AI identity.</p>
+    <input id="r_name" placeholder="Full name" />
+    <input id="r_email" placeholder="Email" />
+    <input id="r_phone" placeholder="Phone (optional)" />
+    <input id="r_pwd" type="password" placeholder="Password" />
+    <button onclick="register()">Create account</button>
+    <p class="muted center">Already have an account? <a href="/login">Sign in</a></p>
+    <div id="msg"></div>
+  </div>
+<script>
+async function register() {
+  const body = {
+    name: v('r_name'),
+    email: v('r_email'),
+    phone: v('r_phone'),
+    password: v('r_pwd')
+  };
+  await call('/auth/register', body);
+}
+function v(id){ return document.getElementById(id).value.trim(); }
+async function call(path, body) {
+  m('Working...');
+  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok) return m('Error: ' + (j.error || r.status));
+  m('Success! Redirecting...');
+  setTimeout(()=> location.href='/', 600);
+}
+function m(t){ document.getElementById('msg').textContent = t; }
+</script>
+</body>
+</html>
+
