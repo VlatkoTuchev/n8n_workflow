@@ -40,7 +40,7 @@ function authRequired(req, res, next) {
 
 // Realtime WebRTC SDP exchange proxy to OpenAI (place before static routing)
 // Accept SDP over POST; respond with OpenAI's SDP answer
-app.all('/realtime/sdp', async (req, res) => {
+app.all('/realtime/sdp', authRequired, async (req, res) => {
   try {
     console.log(`[realtime] ${req.method} /realtime/sdp content-type=${req.headers['content-type']}`);
     const clientOfferSdp = typeof req.body === 'string' ? req.body : (req.body && req.body.toString ? req.body.toString() : '');
@@ -83,7 +83,7 @@ app.all('/realtime/sdp', async (req, res) => {
 });
 
 // Mint a fresh ephemeral token using the permanent API key
-app.all('/realtime/token', async (_req, res) => {
+app.all('/realtime/token', authRequired, async (req, res) => {
   try {
     console.log(`[realtime] ${_req.method} /realtime/token`);
     const apiKey = process.env.OPENAI_API_KEY;
@@ -102,7 +102,8 @@ app.all('/realtime/token', async (_req, res) => {
         model,
         modalities: ['audio', 'text'],
         voice: 'alloy',
-        instructions: 'You are a friendly assistant.'
+        // Provide soft context tying the realtime agent to the authenticated user
+        instructions: `You are a friendly assistant for user ${req.user?.pgUserId || 'unknown'}. Use tools to store and retrieve memories strictly for this user.`
       })
     });
     const data = await upstream.json();
@@ -233,21 +234,21 @@ app.get('/health', async (_req, res) => {
 });
 
 // Tool execution endpoint (user memory + KB + preferences)
-app.post('/tools/execute', async (req, res) => {
+app.post('/tools/execute', authRequired, async (req, res) => {
   try {
     const { name, arguments: args } = req.body || {};
     const toolName = String(name || '').trim();
     if (!toolName) return res.status(400).json({ error: 'Missing tool name' });
+    const authedUserId = (req.user && req.user.pgUserId) || null;
     
     // Lightweight observability to troubleshoot client → server tool calls
     try { console.log('[tools/execute]', toolName, Object.keys(args || {})); } catch (_) {}
 
     // Users
     if (toolName === 'create_user') {
-      const { email } = args || {};
-      if (!email) return res.status(400).json({ error: 'email is required' });
-      const out = await createUser({ email });
-      return res.json({ ok: true, id: out.id });
+      // Identity is provisioned at register/login; just return the authenticated id
+      if (!authedUserId) return res.status(401).json({ error: 'Unauthorized' });
+      return res.json({ ok: true, id: authedUserId });
     }
 
     // Knowledge base
@@ -280,15 +281,15 @@ app.post('/tools/execute', async (req, res) => {
 
     // User memory
     if (toolName === 'retrieve_memories') {
-      const { userId, queryText, topK, kind } = args || {};
-      if (!userId || !queryText) return res.status(400).json({ error: 'userId and queryText are required' });
-      const rows = await retrieveMemories({ userId, queryText, topK, kind });
+      const { queryText, topK, kind } = args || {};
+      if (!authedUserId || !queryText) return res.status(400).json({ error: 'userId and queryText are required' });
+      const rows = await retrieveMemories({ userId: authedUserId, queryText, topK, kind });
       return res.json({ ok: true, results: rows });
     }
 
     if (toolName === 'save_memory') {
-      const { userId, kind, text, metadata } = args || {};
-      if (!userId || !kind || !text) return res.status(400).json({ error: 'userId, kind and text are required' });
+      const { kind, text, metadata } = args || {};
+      if (!authedUserId || !kind || !text) return res.status(400).json({ error: 'userId, kind and text are required' });
 
       // If the payload is actually updating preferred_language, route to upsert logic instead of inserting duplicates
       const metaLang = metadata && typeof metadata === 'object' ? (metadata.preferred_language || metadata.preferredLanguage) : undefined;
@@ -304,35 +305,34 @@ app.post('/tools/execute', async (req, res) => {
         return res.json({ ok: true, id: out.id, upserted: 'preferred_language' });
       }
 
-      const out = await saveMemory({ userId, kind, text, metadata });
+      const out = await saveMemory({ userId: authedUserId, kind, text, metadata });
       return res.json({ ok: true, id: out.id });
     }
 
     if (toolName === 'edit_memory') {
-      const { id, userId, text, kind, metadata } = args || {};
-      if (!id || !userId) return res.status(400).json({ error: 'id and userId are required' });
-      const out = await editMemory({ id, userId, text, kind, metadata });
+      const { id, text, kind, metadata } = args || {};
+      if (!id || !authedUserId) return res.status(400).json({ error: 'id and userId are required' });
+      const out = await editMemory({ id, userId: authedUserId, text, kind, metadata });
       return res.json({ ok: true, id: out.id });
     }
 
     if (toolName === 'set_preferred_language' || toolName === 'setPreferredLanguage') {
-      const { userId, language } = args || {};
-      if (!userId || !language) return res.status(400).json({ error: 'userId and language are required' });
-      const out = await setPreferredLanguage({ userId, language });
+      const { language } = args || {};
+      if (!authedUserId || !language) return res.status(400).json({ error: 'userId and language are required' });
+      const out = await setPreferredLanguage({ userId: authedUserId, language });
       return res.json({ ok: true, id: out.id });
     }
 
     if (toolName === 'read_preferred_language' || toolName === 'readPreferredLanguage') {
-      const { userId } = args || {};
-      if (!userId) return res.status(400).json({ error: 'userId is required' });
-      const out = await readPreferredLanguage({ userId });
+      if (!authedUserId) return res.status(400).json({ error: 'userId is required' });
+      const out = await readPreferredLanguage({ userId: authedUserId });
       return res.json({ ok: true, language: out.language });
     }
 
     if (toolName === 'add_spoken_language' || toolName === 'addSpokenLanguage') {
-      const { userId, language } = args || {};
-      if (!userId || !language) return res.status(400).json({ error: 'userId and language are required' });
-      const out = await addSpokenLanguage({ userId, language });
+      const { language } = args || {};
+      if (!authedUserId || !language) return res.status(400).json({ error: 'userId and language are required' });
+      const out = await addSpokenLanguage({ userId: authedUserId, language });
       return res.json({ ok: true, id: out.id });
     }
 
