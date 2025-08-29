@@ -595,6 +595,18 @@
                     },
                     {
                         type: 'function',
+                        name: 'get_user_context',
+                        description: 'Fetch enriched user context (upcoming, attended, favorites, quizzes, webinar Qs) from the server',
+                        parameters: { type: 'object', properties: {}, additionalProperties: false }
+                    },
+                    {
+                        type: 'function',
+                        name: 'get_user_profile_enriched',
+                        description: 'Fetch enriched user profile from Postgres mirrors',
+                        parameters: { type: 'object', properties: {}, additionalProperties: false }
+                    },
+                    {
+                        type: 'function',
                         name: 'set_preferred_language',
                         description: 'Upsert preferred language for the current user',
                         parameters: {
@@ -619,25 +631,7 @@
                         tool_choice: 'auto',
                         input_audio_transcription: { model: 'whisper-1' },
                         // Disable VAD initially to avoid premature auto-responses before we finish the greeting
-                        turn_detection: null,
-                        instructions: [
-                            // Session start control
-                            'Do not speak automatically on session start. Wait for the client\'s first response.create after it loads user context.',
-                            // Conversational guardrails
-                            'Use the prior session summary (when provided) purely as opening context. Do not jump mid-conversation; first acknowledge and reconnect to that context briefly, then proceed.',
-                            'Vary your first sentence each session. Avoid stock greetings like “Hello there”. Choose a natural opener that fits the summary and time-of-day, e.g., “Good to see you back”, “Welcome again”, “Nice to pick up from last time”, or a short observational remark. Keep it short and friendly.',
-                            'In the first turn: (1) greet naturally; (2) weave in one short nod to the prior session (1 sentence), not a recap; (3) ask one concise, motivating check-in question about continuing or adjusting the plan. Total 2–3 short sentences.',
-                            // Avatar control
-                            'You control one on‑screen avatar. When the user says walk/resume, call set_walk; for dance call set_dance; for fight/box call set_fight.',
-                            // Language
-                            'Speak in the stored preferred_language if available. Do not switch languages mid‑turn. Switch only on explicit request or with two consecutive user turns in another language, and confirm first. After confirmation, call set_preferred_language.',
-                            // Corrections
-                            'If the user corrects a stored fact, acknowledge briefly and continue without repeating the wrong fact.',
-                            // Memory hygiene
-                            'Save only meaningful personal or learning preferences. Avoid saving trivial commands or filler.',
-                            // Tone
-                            'Tone: warm, upbeat, human, and concise. Vary word choice to avoid repetition.'
-                        ].join(' ')
+                        turn_detection: null
                     }
                 }));
 
@@ -757,7 +751,7 @@
                         // Capture assistant spoken words transcript as fallback/source of truth
                         if (msg.type === 'response.audio_transcript.delta') {
                             const t = (msg.delta || msg.text || '').toString();
-                            if (t) { console.log('[Audio Transcript Δ]', t); assistantTextBuf += t; }
+                            if (t) { /* console.log('[Audio Transcript Δ]', t); */ assistantTextBuf += t; }
                         }
                         // Drop audio delta spam
                         if (msg.type === 'response.error') {
@@ -855,6 +849,28 @@
                             if (name === 'set_walk' && window.AvatarController?.setWalk) { window.AvatarController.setWalk(); }
                             if (name === 'set_dance' && window.AvatarController?.setDance) { window.AvatarController.setDance(); }
                             if (name === 'set_fight' && window.AvatarController?.setFight) { window.AvatarController.setFight(); }
+
+                            if (name === 'get_user_context') {
+                                try {
+                                    const payload = await fetch('/user/context').then(r => r.json());
+                                    dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(payload) } }));
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'context_fetch_failed' }) } }));
+                                }
+                                if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
+                                return;
+                            }
+
+                            if (name === 'get_user_profile_enriched') {
+                                try {
+                                    const payload = await fetch('/user/profile_enriched').then(r => r.json());
+                                    dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(payload) } }));
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'profile_fetch_failed' }) } }));
+                                }
+                                if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
+                                return;
+                            }
 
                             // DB-backed tools (trimmed: only keep set_preferred_language)
                             if (name === 'set_preferred_language') {
@@ -1036,45 +1052,38 @@
             let finalizationInProgress = false;
             let finalizationCompleted = false;
             const summarizeAndSave = async () => {
+                // Do not block page teardown; prefer fire-and-forget patterns
                 try {
                     if (finalizationCompleted || finalizationInProgress) return;
                     finalizationInProgress = true;
-                    let sessionId = getSessionId();
-                    if (!sessionId && typeof getUserId === 'function') {
-                        const uid2 = await getUserId();
-                        if (uid2) sessionId = await startNewSessionForUser(uid2);
-                    }
-                    if (!sessionId) { finalizationInProgress = false; return; }
-                    // Ask server to finalize using full Redis buffer
-                    console.log('[summary] finalize: start', { sessionId });
+                    const sessionId = getSessionId() || null; // do not create a new session here
+                    const payload = sessionId ? { sessionId, background: true } : { background: true };
                     let ok = false;
                     try {
+                        // keepalive fetch may still succeed during unload for small JSON payloads
                         const resp = await fetch('/sessions/finalize', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ sessionId }),
+                            body: JSON.stringify(payload),
                             keepalive: true
                         });
-                        const data = await resp.json().catch(() => ({}));
-                        console.log('[summary] finalize: server response', data);
-                        ok = !!(data && (data.ok === true));
-                    } catch (e) {
-                        console.warn('[summary] finalize error', e);
-                    }
+                        ok = resp.ok;
+                    } catch (_) {}
+                    // Best-effort beacon (cookies included on same-origin)
                     if (!ok && navigator.sendBeacon) {
                         try {
-                            const blob = new Blob([JSON.stringify({ sessionId })], { type: 'application/json' });
-                            navigator.sendBeacon('/sessions/finalize', blob);
-                            ok = true;
-                        } catch (_) { /* ignore */ }
+                            const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+                            ok = navigator.sendBeacon('/sessions/finalize', blob);
+                        } catch (_) {}
                     }
+                    // Last resort: sync XHR
                     if (!ok) {
                         try {
                             const xhr = new XMLHttpRequest();
                             xhr.open('POST', '/sessions/finalize', false);
                             xhr.setRequestHeader('Content-Type', 'application/json');
-                            xhr.send(JSON.stringify({ sessionId }));
-                            ok = true;
+                            xhr.send(JSON.stringify(payload));
+                            ok = (xhr.status >= 200 && xhr.status < 300);
                         } catch (_) {}
                     }
                     if (ok) finalizationCompleted = true;

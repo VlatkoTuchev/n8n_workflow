@@ -49,6 +49,117 @@ async function updateSessionConversation(sessionId, role, content) {
   } catch (_) { /* best-effort; do not block tool path */ }
 }
 
+// Compose a concise, human-readable context summary for the authenticated user
+async function composeUserContextSummary(email, pgUserId) {
+  try {
+    if (!email) return '';
+    const userRes = await query(`SELECT id, name, email FROM user_mysql_mirror WHERE email = $1 LIMIT 1`, [email]);
+    const u = userRes?.rows?.[0];
+    if (!u) return '';
+    const uid = u.id;
+    // Prefer language from app table (Postgres UUID)
+    let preferredLang = null;
+    try {
+      if (pgUserId) {
+        const lang = await query(`SELECT preferred_language FROM user_language WHERE user_id = $1`, [pgUserId]);
+        preferredLang = lang?.rows?.[0]?.preferred_language || null;
+      }
+    } catch (_) {}
+
+    const [cats, upcomingMine, attended, attempts, favs, webinarSample, upcomingAll] = await Promise.all([
+      query(
+        `SELECT c.title, COUNT(*) AS n
+           FROM categories_mysql_mirror c
+           JOIN events_mysql_mirror e ON e.category_id = c.id
+           JOIN event_attendances_mysql_mirror a ON a.event_id = e.id
+          WHERE a.user_id = $1
+          GROUP BY c.title
+          ORDER BY n DESC, c.title ASC
+          LIMIT 5`,
+        [uid]
+      ),
+      query(
+        `SELECT e.title, e.start_at
+           FROM events_mysql_mirror e
+           LEFT JOIN event_user_favorites_mysql_mirror f ON f.event_id = e.id AND f.user_id = $1
+           LEFT JOIN event_attendances_mysql_mirror a ON a.event_id = e.id AND a.user_id = $1
+          WHERE e.start_at > now() AND (f.user_id IS NOT NULL OR a.user_id IS NOT NULL)
+          ORDER BY e.start_at ASC
+          LIMIT 5`,
+        [uid]
+      ),
+      query(
+        `SELECT e.title
+           FROM event_attendances_mysql_mirror a
+           JOIN events_mysql_mirror e ON e.id = a.event_id
+          WHERE a.user_id = $1
+          ORDER BY COALESCE(a.left_at, a.joined_at) DESC
+          LIMIT 5`,
+        [uid]
+      ),
+      query(
+        `SELECT event_quiz_id, score_percentage, passed
+           FROM event_quiz_attempts_mysql_mirror
+          WHERE user_id = $1
+          ORDER BY started_at DESC
+          LIMIT 5`,
+        [uid]
+      ),
+      query(
+        `SELECT e.title
+           FROM event_user_favorites_mysql_mirror f
+           JOIN events_mysql_mirror e ON e.id = f.event_id
+          WHERE f.user_id = $1
+          ORDER BY f.created_at DESC
+          LIMIT 5`,
+        [uid]
+      ),
+      query(
+        `SELECT q.question
+           FROM event_webinar_questions_mysql_mirror q
+          WHERE q.event_id IN (
+            SELECT event_id FROM event_attendances_mysql_mirror WHERE user_id = $1
+          )
+          ORDER BY q.created_at DESC
+          LIMIT 5`,
+        [uid]
+      ),
+      query(
+        `SELECT title, start_at
+           FROM events_mysql_mirror
+          WHERE start_at > now() AND COALESCE(is_public,1)=1
+          ORDER BY start_at ASC
+          LIMIT 5`
+      )
+    ]);
+
+    const categories = (cats?.rows || []).map(r => r.title).filter(Boolean);
+    const upcomingMineStr = (upcomingMine?.rows || []).map(r => `${r.title}`).join(' | ');
+    const upcomingAllStr = (upcomingAll?.rows || []).map(r => `${r.title}`).join(' | ');
+    const attendedStr = (attended?.rows || []).map(r => r.title).join(' | ');
+    const quizzesStr = (attempts?.rows || []).map(a => `${a.event_quiz_id}:${a.score_percentage}%${a.passed ? '✓' : '✗'}`).join(' | ');
+    const favsStr = (favs?.rows || []).map(r => r.title).join(' | ');
+    const webinarSampleStr = (webinarSample?.rows || []).map(r => r.question).join(' | ');
+
+    const parts = [];
+    parts.push(`User Name: ${u.name || ''} <${u.email || ''}>`);
+    if (preferredLang) parts.push(`Preferred language: ${preferredLang}`);
+    if (categories.length) parts.push(`Categories: ${categories.join(', ')}`);
+    if (upcomingMineStr) parts.push(`Upcoming Courses (yours): ${upcomingMineStr}`);
+    if (upcomingAllStr) parts.push(`Upcoming Courses (new): ${upcomingAllStr}`);
+    if (attendedStr) parts.push(`Attended Course: ${attendedStr}`);
+    if (favsStr) parts.push(`Favorites Courses: ${favsStr}`);
+    if (quizzesStr) parts.push(`Quizzes (recent): ${quizzesStr}`);
+    if (webinarSampleStr) parts.push(`Webinar Qs (recent): ${webinarSampleStr}`);
+    let out = parts.join('\n');
+    const MAX = 1200; // keep concise for realtime token
+    if (out.length > MAX) out = out.slice(0, MAX - 3) + '...';
+    return out;
+  } catch (_) {
+    return '';
+  }
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -118,6 +229,48 @@ app.all('/realtime/token', authRequired, async (req, res) => {
 
     const model = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
     const fetchImpl = global.fetch || (async (...args) => (await import('node-fetch')).default(...args));
+    // Build compact user context for instructions (no prior-session continuation)
+    let contextSummary = '';
+    try { contextSummary = await composeUserContextSummary(req.user?.email || null, req.user?.pgUserId || null); } catch (_) {}
+    const baseInstructions = `Role & mission: You are a warm, upbeat learning companion and coach for user ${req.user?.pgUserId || 'unknown'}. Help the learner feel they belong, build confidence, and make steady progress.
+Session start: Treat every new session as fresh. Do not continue a prior conversation. On the first response, greet the user by preferred name, acknowledge their context briefly, and ask exactly one open question. Do not say “welcome back” unless the user indicates a return.
+Tone & style: Warm, non-judgmental, concise for voice. Offer choices; ask permission before advice. Use process praise; normalize struggle.
+Conversation loop:
+  1) Connect: Ask one open question; reflect and affirm.
+  2) Plan: Offer 2–3 options; use Elicit–Provide–Elicit for tips.
+  3) Practice: Small retrieval/practice; increase difficulty gradually.
+  4) Feedback: Specific, process-focused; high standards + assurance.
+  5) Reflect: What worked, what was tricky, what next.
+  6) Next step: Propose a micro-goal and optional spaced review.
+Personalization: Use the context below; prefer the user's language when present; request personal details only when relevant and with permission.
+Question cadence: One open question per turn; keep turns 2–4 sentences; use examples; avoid jargon unless the learner prefers it.
+Safety: Avoid probing sensitive info; be culturally respectful.
+Do: invite choice, affirm effort, normalize struggle, summarize progress. Don't: lecture long or stack multiple questions.
+Exit: Summarize wins + next tiny action; confirm a follow-up.`;
+    const insParts = [baseInstructions];
+    if (contextSummary) insParts.push(`Context for personalization:\n${contextSummary}`);
+    let instructions = insParts.join('\n\n');
+    const MAX_INS = 4000; if (instructions.length > MAX_INS) instructions = instructions.slice(0, MAX_INS - 3) + '...';
+
+    // Optional debug log of what we inject (redacted/trimmed)
+    try {
+      const envVal = String(process.env.DEBUG_CONTEXT_LOG || '').toLowerCase();
+      const dbgEnv = ['true','1','yes','on','full','all'].includes(envVal);
+      const dbgQueryStr = String(req.query?.debug || '').toLowerCase();
+      const dbgQuery = ['true','1','yes','on','full','all','raw'].includes(dbgQueryStr);
+      const full = ['full','all','raw'].includes(envVal) || ['full','all','raw'].includes(dbgQueryStr);
+      if (dbgEnv || dbgQuery) {
+        const preview = (s, n=800) => (s ? String(s).slice(0, n) : '');
+        console.log('================ [realtime.token context] ================');
+        console.log('email:', req.user?.email || null);
+        console.log('contextSummary.len:', (contextSummary || '').length);
+        console.log(full ? 'contextSummary.full:' : 'contextSummary.preview:', full ? (contextSummary || '') : preview(contextSummary));
+        console.log('instructions.len:', (instructions || '').length);
+        console.log(full ? 'instructions.full:' : 'instructions.preview:', full ? (instructions || '') : preview(instructions, 1200));
+        console.log('==========================================================');
+      }
+    } catch (_) {}
+
     const upstream = await fetchImpl('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
       headers: {
@@ -130,7 +283,7 @@ app.all('/realtime/token', authRequired, async (req, res) => {
         modalities: ['audio', 'text'],
         voice: 'alloy',
         // Provide soft context tying the realtime agent to the authenticated user
-        instructions: `You are a friendly assistant for user ${req.user?.pgUserId || 'unknown'}. Use tools to store and retrieve memories strictly for this user.`
+        instructions
       })
     });
     const data = await upstream.json();
@@ -239,12 +392,230 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
-app.post('/auth/logout', (req, res) => {
-  res.clearCookie('auth'); res.json({ ok: true });
+app.post('/auth/logout', async (req, res) => {
+  try {
+    // Attempt to finalize the latest session for this user before logging out
+    let pgUserId = null;
+    try {
+      const token = (req.cookies && req.cookies.auth) || '';
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      pgUserId = decoded?.pgUserId || null;
+    } catch (_) {}
+
+    if (pgUserId) {
+      try {
+        const row = await query(
+          `SELECT id FROM chat_session WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+          [pgUserId]
+        );
+        if (row && row.rows && row.rows[0]) {
+          const sid = row.rows[0].id;
+          console.log('[summary] logout_finalize (bg)', { sessionId: sid, userId: pgUserId });
+          // Fire-and-forget in background so logout returns immediately
+          setImmediate(() => {
+            summarizeAndSaveSession(sid, pgUserId).catch((e) => {
+              try { console.warn('logout finalize failed', e?.message || e); } catch (_) {}
+            });
+          });
+        }
+      } catch (_) {}
+    }
+  } finally {
+    res.clearCookie('auth');
+    res.json({ ok: true });
+  }
 });
 
 app.get('/me', authRequired, (req, res) => {
   res.json({ ok: true, ...req.user });
+});
+
+// Basic profile for the authenticated user from MySQL
+app.get('/user/profile', authRequired, async (req, res) => {
+  try {
+    const email = req.user && req.user.email;
+    if (!email) return res.status(400).json({ error: 'No email on token' });
+    const rows = await mysqlDb.query(
+      `SELECT id,name,email,created_at,updated_at FROM users WHERE email=? LIMIT 1`,
+      [email]
+    );
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
+    const u = rows[0];
+    let extras = null;
+    try {
+      const d = await mysqlDb.query(
+        `SELECT onboarding_step,avatar,ai_avatar,onboarding_completed_at FROM user_data WHERE user_id=? LIMIT 1`,
+        [u.id]
+      );
+      if (d && d.length) extras = d[0];
+    } catch (_) {}
+    return res.json({ ok: true, profile: { id: u.id, name: u.name, email: u.email, created_at: u.created_at, updated_at: u.updated_at, ...(extras || {}) } });
+  } catch (e) {
+    console.error('profile error', e);
+    res.status(500).json({ error: 'profile failed' });
+  }
+});
+
+// Enriched profile from Postgres mirror tables (via view or direct joins)
+app.get('/user/profile_enriched', authRequired, async (req, res) => {
+  try {
+    const email = req.user && req.user.email;
+    if (!email) return res.status(400).json({ error: 'No email on token' });
+    // Prefer a view if it exists; otherwise fall back to a safe join
+    let row = null;
+    try {
+      const r = await query(
+        `SELECT * FROM user_profile_enriched WHERE email = $1 LIMIT 1`,
+        [email]
+      );
+      row = (r && r.rows && r.rows[0]) || null;
+    } catch (_) {}
+    if (!row) {
+      const r2 = await query(
+        `SELECT u.id, u.name, u.email, u.updated_at,
+                ud.avatar, ud.onboarding_step
+           FROM user_mysql_mirror u
+      LEFT JOIN user_data_mysql_mirror ud ON ud.user_id = u.id
+          WHERE u.email = $1
+          LIMIT 1`,
+        [email]
+      );
+      row = (r2 && r2.rows && r2.rows[0]) || null;
+    }
+    if (!row) return res.status(404).json({ error: 'Profile not found' });
+    return res.json({ ok: true, profile: row });
+  } catch (e) {
+    console.error('profile_enriched error', e);
+    res.status(500).json({ error: 'profile_enriched failed' });
+  }
+});
+
+// Deep user context for personalization (reads Postgres mirrors)
+app.get('/user/context', authRequired, async (req, res) => {
+  try {
+    const email = req.user && req.user.email;
+    if (!email) return res.status(400).json({ error: 'No email on token' });
+
+    // Resolve MySQL numeric user_id from mirrored users
+    const ures = await query(`SELECT id FROM user_mysql_mirror WHERE email = $1 LIMIT 1`, [email]);
+    const mysqlUserId = ures?.rows?.[0]?.id || null;
+    if (!mysqlUserId) return res.status(404).json({ error: 'User not mirrored yet' });
+
+    // Upcoming events user is registered/favorited for (start_at in future)
+    const upcoming = await query(
+      `SELECT e.id, e.title, e.description, e.start_at, e.length, e.category_id
+         FROM events_mysql_mirror e
+         LEFT JOIN event_user_favorites_mysql_mirror f ON f.event_id = e.id AND f.user_id = $1
+         LEFT JOIN event_attendances_mysql_mirror a ON a.event_id = e.id AND a.user_id = $1
+        WHERE e.start_at > now()
+          AND (f.user_id IS NOT NULL OR a.user_id IS NOT NULL)
+        ORDER BY e.start_at ASC
+        LIMIT 50`,
+      [mysqlUserId]
+    );
+
+    // Most recent attended events
+    const attended = await query(
+      `SELECT e.id, e.title, e.start_at, a.joined_at, a.left_at, a.duration
+         FROM event_attendances_mysql_mirror a
+         JOIN events_mysql_mirror e ON e.id = a.event_id
+        WHERE a.user_id = $1
+        ORDER BY COALESCE(a.left_at, a.joined_at) DESC
+        LIMIT 50`,
+      [mysqlUserId]
+    );
+
+    // Materials for user's attended or favorited events
+    const materials = await query(
+      `SELECT m.event_id, m.title, m.type, m.data, m.created_at
+         FROM event_materials_mysql_mirror m
+         WHERE m.event_id IN (
+           SELECT event_id FROM event_attendances_mysql_mirror WHERE user_id = $1
+           UNION
+           SELECT event_id FROM event_user_favorites_mysql_mirror WHERE user_id = $1
+         )
+        ORDER BY m.created_at DESC
+        LIMIT 200`,
+      [mysqlUserId]
+    );
+
+    // Quiz attempts and responses
+    const quizAttempts = await query(
+      `SELECT qa.id, qa.event_quiz_id, qa.attempt_number, qa.score_percentage, qa.passed, qa.started_at, qa.completed_at
+         FROM event_quiz_attempts_mysql_mirror qa
+        WHERE qa.user_id = $1
+        ORDER BY qa.started_at DESC
+        LIMIT 100`,
+      [mysqlUserId]
+    );
+    const quizResponses = await query(
+      `SELECT r.event_quiz_attempt_id, r.event_quiz_question_id, r.selected_option_index, r.is_correct, r.answered_at
+         FROM event_quiz_responses_mysql_mirror r
+        WHERE r.event_quiz_attempt_id IN (
+          SELECT id FROM event_quiz_attempts_mysql_mirror WHERE user_id = $1
+        )
+        ORDER BY r.answered_at DESC
+        LIMIT 1000`,
+      [mysqlUserId]
+    );
+
+    // Webinar Q&A by user
+    const webinarQA = await query(
+      `SELECT q.event_id, q.question, q.answer, q.is_answered, q.created_at, q.updated_at
+         FROM event_webinar_questions_mysql_mirror q
+        WHERE q.user_id = $1 OR q.email = $2
+        ORDER BY q.created_at DESC
+        LIMIT 200`,
+      [mysqlUserId, email]
+    );
+
+    // NPS feedback
+    const nps = await query(
+      `SELECT n.event_id, n.event_rating, n.lecturer_rating, n.created_at
+         FROM event_nps_responses_mysql_mirror n
+        WHERE n.user_id = $1
+        ORDER BY n.created_at DESC
+        LIMIT 200`,
+      [mysqlUserId]
+    );
+
+    // Certificates
+    const certificates = await query(
+      `SELECT c.event_id, c.certificate, c.status, c.created_at
+         FROM event_certificates_mysql_mirror c
+        WHERE c.user_id = $1
+        ORDER BY c.created_at DESC
+        LIMIT 200`,
+      [mysqlUserId]
+    );
+
+    // Preferred categories from recent events
+    const categories = await query(
+      `SELECT DISTINCT c.id, c.title, c.color
+         FROM categories_mysql_mirror c
+         JOIN events_mysql_mirror e ON e.category_id = c.id
+         JOIN event_attendances_mysql_mirror a ON a.event_id = e.id
+        WHERE a.user_id = $1
+        ORDER BY c.title ASC
+        LIMIT 100`,
+      [mysqlUserId]
+    );
+
+    return res.json({ ok: true, user_id: mysqlUserId,
+      upcoming_events: upcoming.rows,
+      attended_events: attended.rows,
+      materials: materials.rows,
+      quiz_attempts: quizAttempts.rows,
+      quiz_responses: quizResponses.rows,
+      webinar_qa: webinarQA.rows,
+      nps: nps.rows,
+      certificates: certificates.rows,
+      categories: categories.rows
+    });
+  } catch (e) {
+    console.error('user_context error', e);
+    res.status(500).json({ error: 'context failed' });
+  }
 });
 
 // Health check for Postgres and Redis
@@ -374,6 +745,51 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       if (!authedUserId || !language) return res.status(400).json({ error: 'userId and language are required' });
       await setPreferredLanguagePg({ userId: authedUserId, language });
       return res.json({ ok: true });
+    }
+
+    if (toolName === 'get_user_profile') {
+      // Fetch the authenticated user's profile from MySQL (name, email, plus basic extras)
+      const email = (req.user && req.user.email) || null;
+      if (!email) return res.status(400).json({ error: 'No email on token' });
+      const rows = await mysqlDb.query(
+        `SELECT id,name,email,created_at,updated_at FROM users WHERE email=? LIMIT 1`,
+        [email]
+      );
+      if (!rows || rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
+      const u = rows[0];
+      let extras = null;
+      try {
+        const d = await mysqlDb.query(
+          `SELECT onboarding_step,avatar,ai_avatar,onboarding_completed_at FROM user_data WHERE user_id=? LIMIT 1`,
+          [u.id]
+        );
+        if (d && d.length) extras = d[0];
+      } catch (_) {}
+      return res.json({ ok: true, profile: { id: u.id, name: u.name, email: u.email, created_at: u.created_at, updated_at: u.updated_at, ...(extras || {}) } });
+    }
+
+    if (toolName === 'get_user_profile_enriched') {
+      const email = (req.user && req.user.email) || null;
+      if (!email) return res.status(400).json({ error: 'No email on token' });
+      let row = null;
+      try {
+        const r = await query(`SELECT * FROM user_profile_enriched WHERE email = $1 LIMIT 1`, [email]);
+        row = (r && r.rows && r.rows[0]) || null;
+      } catch (_) {}
+      if (!row) {
+        const r2 = await query(
+          `SELECT u.id, u.name, u.email, u.updated_at,
+                  ud.avatar, ud.onboarding_step
+             FROM user_mysql_mirror u
+        LEFT JOIN user_data_mysql_mirror ud ON ud.user_id = u.id
+            WHERE u.email = $1
+            LIMIT 1`,
+          [email]
+        );
+        row = (r2 && r2.rows && r2.rows[0]) || null;
+      }
+      if (!row) return res.status(404).json({ error: 'Profile not found' });
+      return res.json({ ok: true, profile: row });
     }
 
     return res.status(404).json({ error: 'Unknown tool', name: toolName });
@@ -522,22 +938,43 @@ app.post('/sessions/heartbeat', authRequired, async (req, res) => {
 
 app.post('/sessions/finalize', authRequired, async (req, res) => {
   try {
-    const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    let { sessionId, background } = req.body || {};
+    // If the client couldn't pass a sessionId (e.g., unload beacons), fall back to the user's latest session
+    if (!sessionId) {
+      try {
+        const row = await query(
+          `SELECT id FROM chat_session WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+          [req.user?.pgUserId || null]
+        );
+        if (row && row.rows && row.rows[0]) sessionId = row.rows[0].id;
+      } catch (_) {}
+      if (!sessionId) return res.status(400).json({ error: 'sessionId required and no recent session found for user' });
+    }
     const userId = req.user?.pgUserId || null;
-    console.log('[summary] /sessions/finalize invoked', { sessionId, userId });
-    const result = await summarizeAndSaveSession(sessionId, userId);
-    console.log('[summary] /sessions/finalize result', result);
-    return res.json({ ok: true, ...result });
+    if (String(background).toLowerCase() === 'true' || background === true) {
+      console.log('[summary] /sessions/finalize (bg) queued', { sessionId, userId });
+      setImmediate(() => {
+        summarizeAndSaveSession(sessionId, userId).catch((e) => {
+          try { console.warn('finalize (bg) failed', e?.message || e); } catch (_) {}
+        });
+      });
+      return res.json({ ok: true, queued: true });
+    } else {
+      console.log('[summary] /sessions/finalize invoked', { sessionId, userId });
+      const result = await summarizeAndSaveSession(sessionId, userId);
+      console.log('[summary] /sessions/finalize result', result);
+      return res.json({ ok: true, ...result });
+    }
   } catch (e) {
     console.error('finalize error', e);
     res.status(500).json({ error: 'finalize failed' });
   }
 });
 
-// Optional: idle summarizer (disabled by default). Set ENABLE_IDLE_SUMMARIZER=true to enable.
-if (String(process.env.ENABLE_IDLE_SUMMARIZER || '').toLowerCase() === 'true') {
-  const IDLE_MS = Math.max(60_000, Number(process.env.SESSION_IDLE_MS || 5 * 60_000));
+// Idle summarizer (enabled by default; set ENABLE_IDLE_SUMMARIZER=false to disable)
+if (String(process.env.ENABLE_IDLE_SUMMARIZER || 'true').toLowerCase() !== 'false') {
+  // 60s default idle window
+  const IDLE_MS = Math.max(60_000, Number(process.env.SESSION_IDLE_MS || 60_000));
   setInterval(async () => {
     try {
       await connectRedis();
@@ -553,7 +990,7 @@ if (String(process.env.ENABLE_IDLE_SUMMARIZER || '').toLowerCase() === 'true') {
             `SELECT id FROM chat_session_summary WHERE session_id = $1 LIMIT 1`,
             [sessionId]
           );
-          if (existing.rows && existing.rows[0]) continue;
+          if (existing.rows && existing.rows[0]) { try { await redis.del(key); } catch (_) {} continue; }
           // Attempt to read userId from cookie mapping, else null
           let userId = null;
           try { userId = await redis.get(`chat:session_user:${sessionId}`); } catch (_) {}
@@ -566,7 +1003,7 @@ if (String(process.env.ENABLE_IDLE_SUMMARIZER || '').toLowerCase() === 'true') {
     } catch (e) {
       console.error('idle summarizer error', e);
     }
-  }, Math.max(30_000, Number(process.env.IDLE_SUMMARIZER_INTERVAL_MS || 60_000)));
+  }, Math.max(15_000, Number(process.env.IDLE_SUMMARIZER_INTERVAL_MS || 30_000)));
 }
 
 const PORT = process.env.PORT || 4400;
