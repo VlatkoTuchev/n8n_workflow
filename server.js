@@ -3,24 +3,51 @@ const path = require('path');
 const cors = require('cors');
 require('dotenv').config();
 const { query } = require('./db');
-const { redis, connectRedis, addChatTurn, getRecentChat } = require('./redis');
+const { redis, connectRedis, addChatTurn, getRecentChat, getFullChat, setSessionActivity } = require('./redis');
 const {
-  retrieveMemories,
-  saveMemory,
-  editMemory,
-  setPreferredLanguage,
-  readPreferredLanguage,
-  addSpokenLanguage,
   createUser,
   createKb,
   kbAddText,
   retrieveKb,
-  createChatSession
+  createChatSession,
+  addChatMessage,
+  getRecentMessages,
+  saveSessionSummary,
+  readLatestSummary,
+  readPreferredLanguagePg,
+  setPreferredLanguagePg
 } = require('./retrieval');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cookieParser = require('cookie-parser');
 const mysqlDb = require('./mysql');
+const OpenAI = require('openai');
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Append user/model turns to chat_session.conversation (JSON array) in realtime
+async function updateSessionConversation(sessionId, role, content) {
+  try {
+    if (!sessionId || !content) return;
+    const res = await query(`SELECT conversation FROM chat_session WHERE id = $1`, [sessionId]);
+    let convo = [];
+    try { convo = Array.isArray(res.rows?.[0]?.conversation) ? res.rows[0].conversation : JSON.parse(JSON.stringify(res.rows?.[0]?.conversation || [])); } catch (_) { convo = []; }
+    const nowIso = new Date().toISOString();
+    if (role === 'user') {
+      convo.push({ user: String(content), model: null, created: nowIso });
+    } else if (role === 'assistant') {
+      let updated = false;
+      for (let i = convo.length - 1; i >= 0; i--) {
+        if (convo[i] && (convo[i].model == null)) { convo[i].model = String(content); updated = true; break; }
+      }
+      if (!updated) { convo.push({ user: null, model: String(content), created: nowIso }); }
+    } else {
+      convo.push({ user: null, model: String(content), created: nowIso });
+    }
+    const maxPairs = Math.max(1, Number(process.env.CONVERSATION_MAX_PAIRS || 200));
+    if (convo.length > maxPairs) { convo = convo.slice(convo.length - maxPairs); }
+    await query(`UPDATE chat_session SET conversation = $2 WHERE id = $1`, [sessionId, JSON.stringify(convo)]);
+  } catch (_) { /* best-effort; do not block tool path */ }
+}
 
 const app = express();
 app.use(cors());
@@ -53,7 +80,7 @@ app.all('/realtime/sdp', authRequired, async (req, res) => {
       return res.status(500).send('OPENAI_API_KEY not configured');
     }
 
-    const model = process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview-2024-10-21';
+    const model = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
 
     const fetchImpl = global.fetch || (async (...args) => (await import('node-fetch')).default(...args));
 
@@ -85,11 +112,11 @@ app.all('/realtime/sdp', authRequired, async (req, res) => {
 // Mint a fresh ephemeral token using the permanent API key
 app.all('/realtime/token', authRequired, async (req, res) => {
   try {
-    console.log(`[realtime] ${_req.method} /realtime/token`);
+    console.log(`[realtime] ${req.method} /realtime/token`);
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
 
-    const model = process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview';
+    const model = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
     const fetchImpl = global.fetch || (async (...args) => (await import('node-fetch')).default(...args));
     const upstream = await fetchImpl('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
@@ -279,67 +306,23 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       return res.json({ ok: true, id: out.id });
     }
 
-    // User memory
-    if (toolName === 'retrieve_memories') {
-      const { queryText, topK, kind } = args || {};
-      if (!authedUserId || !queryText) return res.status(400).json({ error: 'userId and queryText are required' });
-      const rows = await retrieveMemories({ userId: authedUserId, queryText, topK, kind });
-      return res.json({ ok: true, results: rows });
-    }
-
-    if (toolName === 'save_memory') {
-      const { kind, text, metadata } = args || {};
-      if (!authedUserId || !kind || !text) return res.status(400).json({ error: 'userId, kind and text are required' });
-
-      // If the payload is actually updating preferred_language, route to upsert logic instead of inserting duplicates
-      const metaLang = metadata && typeof metadata === 'object' ? (metadata.preferred_language || metadata.preferredLanguage) : undefined;
-      let textLang = undefined;
-      try {
-        const m = String(text || '').match(/preferred[_\s-]?language\s*[:=]\s*([A-Za-zÀ-ÖØ-öø-ÿ\- ]{2,30})/i);
-        if (m && m[1]) textLang = m[1].trim();
-      } catch (_) {}
-
-      const inferredLang = String(metaLang || textLang || '').trim();
-      if (inferredLang) {
-        const out = await setPreferredLanguage({ userId, language: inferredLang });
-        return res.json({ ok: true, id: out.id, upserted: 'preferred_language' });
-      }
-
-      const out = await saveMemory({ userId: authedUserId, kind, text, metadata });
-      return res.json({ ok: true, id: out.id });
-    }
-
-    if (toolName === 'edit_memory') {
-      const { id, text, kind, metadata } = args || {};
-      if (!id || !authedUserId) return res.status(400).json({ error: 'id and userId are required' });
-      const out = await editMemory({ id, userId: authedUserId, text, kind, metadata });
-      return res.json({ ok: true, id: out.id });
-    }
-
-    if (toolName === 'set_preferred_language' || toolName === 'setPreferredLanguage') {
-      const { language } = args || {};
-      if (!authedUserId || !language) return res.status(400).json({ error: 'userId and language are required' });
-      const out = await setPreferredLanguage({ userId: authedUserId, language });
-      return res.json({ ok: true, id: out.id });
-    }
-
-    if (toolName === 'read_preferred_language' || toolName === 'readPreferredLanguage') {
-      if (!authedUserId) return res.status(400).json({ error: 'userId is required' });
-      const out = await readPreferredLanguage({ userId: authedUserId });
-      return res.json({ ok: true, language: out.language });
-    }
-
-    if (toolName === 'add_spoken_language' || toolName === 'addSpokenLanguage') {
-      const { language } = args || {};
-      if (!authedUserId || !language) return res.status(400).json({ error: 'userId and language are required' });
-      const out = await addSpokenLanguage({ userId: authedUserId, language });
-      return res.json({ ok: true, id: out.id });
-    }
-
     if (toolName === 'add_chat_turn' || toolName === 'addChatTurn') {
       const { sessionId, role, content } = args || {};
       if (!sessionId || !role || !content) return res.status(400).json({ error: 'sessionId, role, content required' });
       await addChatTurn(sessionId, role, content);
+      try {
+        let effUserId = authedUserId || null;
+        if (!effUserId) {
+          try {
+            const r = await query(`SELECT user_id FROM chat_session WHERE id = $1`, [sessionId]);
+            if (r.rows && r.rows[0] && r.rows[0].user_id) effUserId = r.rows[0].user_id;
+          } catch (_) {}
+        }
+        await addChatMessage({ sessionId, userId: effUserId, role, content });
+      } catch (e) {
+        try { console.error('[add_chat_message error]', e && e.message ? e.message : e); } catch (_) {}
+      }
+      try { await updateSessionConversation(sessionId, String(role || '').toLowerCase(), content); } catch (_) {}
       return res.json({ ok: true });
     }
 
@@ -347,7 +330,50 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       const { sessionId, n } = args || {};
       if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
       const items = await getRecentChat(sessionId, n || 20);
-      return res.json({ ok: true, items });
+      let dbItems = [];
+      try { dbItems = await getRecentMessages({ sessionId, n: n || 50 }); } catch (_) {}
+      return res.json({ ok: true, items, dbItems });
+    }
+
+    if (toolName === 'save_session_summary') {
+      const { sessionId, summary, nextPrompt, use_model, auto, from_messages } = args || {};
+      if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+      // If explicitly requested (or summary omitted), summarize from chat_message via model
+      if (use_model === true || auto === true || from_messages === true || !summary) {
+        console.log('[summary] save_session_summary→summarizeAndSaveSession', { sessionId, user: authedUserId });
+        const result = await summarizeAndSaveSession(sessionId, authedUserId);
+        return res.json({ ok: true, ...result });
+      }
+      console.log('[summary] saving raw summary for session', sessionId, 'user', authedUserId);
+      const out = await saveSessionSummary({ sessionId, userId: authedUserId, summary, nextPrompt });
+      console.log('[summary] saved id', out.id);
+      return res.json({ ok: true, id: out.id });
+    }
+
+    if (toolName === 'summarize_session' || toolName === 'finalize_session') {
+      const { sessionId } = args || {};
+      if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
+      const result = await summarizeAndSaveSession(sessionId, authedUserId);
+      return res.json({ ok: true, ...result });
+    }
+
+    if (toolName === 'read_latest_summary') {
+      if (!authedUserId) return res.status(400).json({ error: 'userId is required' });
+      const row = await readLatestSummary({ userId: authedUserId });
+      return res.json({ ok: true, summary: row });
+    }
+
+    if (toolName === 'read_preferred_language') {
+      if (!authedUserId) return res.status(400).json({ error: 'userId is required' });
+      const out = await readPreferredLanguagePg({ userId: authedUserId });
+      return res.json({ ok: true, language: out.language });
+    }
+
+    if (toolName === 'set_preferred_language') {
+      const { language } = args || {};
+      if (!authedUserId || !language) return res.status(400).json({ error: 'userId and language are required' });
+      await setPreferredLanguagePg({ userId: authedUserId, language });
+      return res.json({ ok: true });
     }
 
     return res.status(404).json({ error: 'Unknown tool', name: toolName });
@@ -410,6 +436,138 @@ app.post('/webhook', (req, res) => {
   const reply = message ? `You said: ${message}` : 'Hello! I am listening.';
   res.json({ response: reply });
 });
+
+// ---- Session activity and finalization ----
+async function summarizeAndSaveSession(sessionId, userId) {
+  console.log('[summary] summarizeAndSaveSession:start', { sessionId, userId });
+  // 1) Prefer aggregated JSON from chat_message for this session
+  let transcript = '';
+  try {
+    const agg = await query(
+      `SELECT content FROM chat_message WHERE session_id = $1 AND ($2::uuid IS NULL OR user_id = $2) LIMIT 1`,
+      [sessionId, userId || null]
+    );
+    const arr = agg.rows && agg.rows[0] && Array.isArray(agg.rows[0].content) ? agg.rows[0].content : null;
+    if (arr && arr.length) {
+      transcript = arr.map(m => `${m.role === 'model' ? 'Assistant' : 'User'}: ${String(m.text || '').trim()}`).join('\n');
+    }
+  } catch (_) {}
+  // 1b) Fallback to Redis buffer, then message table rows if aggregated JSON is missing
+  if (!transcript) {
+    const redisItems = await getFullChat(sessionId);
+    let convo = redisItems;
+    if (!convo || convo.length === 0) {
+      try {
+        const dbItems = await query(
+          `SELECT role, content, created_at FROM chat_message WHERE session_id = $1 ORDER BY created_at ASC`,
+          [sessionId]
+        );
+        convo = dbItems.rows.map(r => ({ role: r.role, content: r.content, ts: new Date(r.created_at).getTime() }));
+      } catch (_) { convo = []; }
+    }
+    if (!convo || convo.length === 0) return { saved: false, reason: 'no_conversation' };
+    transcript = convo.map(item => `${item.role === 'assistant' ? 'Assistant' : 'User'}: ${String(item.content || '').trim()}`).join('\n');
+  }
+  // 1c) If still empty and userId is known, load latest conversation row by user
+  if (!transcript && userId) {
+    try {
+      const latest = await query(
+        `SELECT content FROM chat_message WHERE user_id = $1 ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+        [userId]
+      );
+      const arr = latest.rows && latest.rows[0] && Array.isArray(latest.rows[0].content) ? latest.rows[0].content : null;
+      if (arr && arr.length) {
+        transcript = arr.map(m => `${m.role === 'model' ? 'Assistant' : 'User'}: ${String(m.text || '').trim()}`).join('\n');
+      }
+    } catch (_) {}
+  }
+  console.log('[summary] transcript_ready', { sessionId, userId, length: transcript.length, preview: transcript.slice(0, 180) });
+
+  // 3) Ask OpenAI for a concise summary and a Next: line
+  const sys = 'You write concise narrative session summaries (5–8 sentences). End with a final line that begins with "Next:" followed by one short sentence proposing how to continue next time. Do not include bullet points or lists.';
+  const prompt = `Summarize the following conversation. ${userId ? `User ID: ${userId}.` : ''}\n\nConversation:\n${transcript}`;
+  const model = process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o';
+  const completion = await openai.chat.completions.create({
+    model,
+    messages: [
+      { role: 'system', content: sys },
+      { role: 'user', content: prompt }
+    ],
+    temperature: 0.3,
+    max_tokens: 600
+  });
+  const summaryText = (completion.choices?.[0]?.message?.content || '').trim();
+  if (!summaryText) return { saved: false, reason: 'summary_failed' };
+  let nextPrompt = null;
+  const m = summaryText.match(/\bNext:\s*(.+)$/mi);
+  if (m) nextPrompt = m[1].trim();
+  console.log('[summary] model_returned', { len: summaryText.length, nextPrompt });
+
+  // 4) Persist via UPSERT and return stored row
+  const saved = await saveSessionSummary({ sessionId, userId, summary: summaryText, nextPrompt });
+  console.log('[summary] saved_row', { id: saved.id, sessionId: saved.session_id, userId: saved.user_id, updated_at: saved.updated_at });
+  return { saved: true, id: saved.id, summary: saved.summary, nextPrompt: saved.next_prompt };
+}
+app.post('/sessions/heartbeat', authRequired, async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    await setSessionActivity(sessionId, req.user?.pgUserId);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('heartbeat error', e);
+    res.status(500).json({ error: 'heartbeat failed' });
+  }
+});
+
+app.post('/sessions/finalize', authRequired, async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    const userId = req.user?.pgUserId || null;
+    console.log('[summary] /sessions/finalize invoked', { sessionId, userId });
+    const result = await summarizeAndSaveSession(sessionId, userId);
+    console.log('[summary] /sessions/finalize result', result);
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('finalize error', e);
+    res.status(500).json({ error: 'finalize failed' });
+  }
+});
+
+// Optional: idle summarizer (disabled by default). Set ENABLE_IDLE_SUMMARIZER=true to enable.
+if (String(process.env.ENABLE_IDLE_SUMMARIZER || '').toLowerCase() === 'true') {
+  const IDLE_MS = Math.max(60_000, Number(process.env.SESSION_IDLE_MS || 5 * 60_000));
+  setInterval(async () => {
+    try {
+      await connectRedis();
+      const now = Date.now();
+      for await (const key of redis.scanIterator({ MATCH: 'chat:last_activity:*', COUNT: 100 })) {
+        try {
+          const tsStr = await redis.get(key);
+          const ts = tsStr ? Number(tsStr) : 0;
+          if (!ts || (now - ts) < IDLE_MS) continue;
+          const sessionId = key.split(':').pop();
+          // Skip if already summarized
+          const existing = await query(
+            `SELECT id FROM chat_session_summary WHERE session_id = $1 LIMIT 1`,
+            [sessionId]
+          );
+          if (existing.rows && existing.rows[0]) continue;
+          // Attempt to read userId from cookie mapping, else null
+          let userId = null;
+          try { userId = await redis.get(`chat:session_user:${sessionId}`); } catch (_) {}
+          console.log('[summary] idle_finalizer running', { sessionId, userId });
+          await summarizeAndSaveSession(sessionId, userId);
+          // Mark as processed to avoid repeats soon
+          await redis.del(key);
+        } catch (_) {}
+      }
+    } catch (e) {
+      console.error('idle summarizer error', e);
+    }
+  }, Math.max(30_000, Number(process.env.IDLE_SUMMARIZER_INTERVAL_MS || 60_000)));
+}
 
 const PORT = process.env.PORT || 4400;
 app.listen(PORT, () => console.log(`Static server running at http://localhost:${PORT}`));

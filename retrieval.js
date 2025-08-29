@@ -1,92 +1,6 @@
-const { query } = require('./db');
-const { embedText } = require('./embed');
+const { query, pool } = require('./db');
 const crypto = require('crypto');
-
-async function retrieveMemories({ userId, queryText, topK = 6, kind }) {
-  const [qvec] = await embedText(queryText);
-  const vecLiteral = '[' + qvec.join(',') + ']';
-  const whereKind = kind ? `AND kind = $3` : '';
-  const params = kind ? [userId, vecLiteral, kind, topK] : [userId, vecLiteral, topK];
-  const sql = `
-    SELECT id, user_id, kind, text, metadata,
-           1 - (embedding <=> $2::vector) AS score
-    FROM user_memory
-    WHERE user_id = $1 ${whereKind}
-    ORDER BY embedding <-> $2::vector
-    LIMIT $${kind ? 4 : 3}
-  `;
-  const res = await query(sql, params);
-  return res.rows;
-}
-
-async function saveMemory({ userId, kind, text, metadata }) {
-  const [vec] = await embedText(text);
-  const vecLiteral = '[' + vec.join(',') + ']';
-  const sql = `
-    INSERT INTO user_memory (user_id, kind, text, embedding, metadata)
-    VALUES ($1, $2, $3, $4::vector, $5)
-    RETURNING id
-  `;
-  const res = await query(sql, [userId, kind, text, vecLiteral, metadata || {}]);
-  return { id: res.rows[0].id };
-}
-
-async function editMemory({ id, userId, text, kind, metadata }) {
-  let embeddingLiteral = null;
-  if (typeof text === 'string' && text.trim().length > 0) {
-    const [vec] = await embedText(text);
-    embeddingLiteral = '[' + vec.join(',') + ']';
-  }
-  const sets = [];
-  const params = [];
-  let p = 1;
-  if (text != null) { sets.push(`text = $${p++}`); params.push(text); }
-  if (kind != null) { sets.push(`kind = $${p++}`); params.push(kind); }
-  if (metadata != null) { sets.push(`metadata = $${p++}`); params.push(metadata); }
-  if (embeddingLiteral != null) { sets.push(`embedding = $${p++}::vector`); params.push(embeddingLiteral); }
-  if (sets.length === 0) return { id };
-  params.push(id, userId);
-  const sql = `UPDATE user_memory SET ${sets.join(', ')} WHERE id = $${p++} AND user_id = $${p} RETURNING id`;
-  const res = await query(sql, params);
-  if (!res.rows[0]) throw new Error('Not found');
-  return { id: res.rows[0].id };
-}
-
-async function setPreferredLanguage({ userId, language }) {
-  const normalized = String(language || '').trim();
-  if (!userId || !normalized) throw new Error('userId and language are required');
-
-  // Find latest personal memory that already stores preferred_language
-  const existing = await query(
-    `SELECT id, metadata FROM user_memory
-     WHERE user_id = $1 AND kind = 'personal' AND (metadata->>'preferred_language') IS NOT NULL
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [userId]
-  );
-
-  const text = `preferred_language: ${normalized}`;
-
-  if (existing.rows[0]) {
-    const mem = existing.rows[0];
-    const meta = Object.assign({}, mem.metadata || {});
-    meta.preferred_language = normalized;
-    return editMemory({ id: mem.id, userId, text, metadata: meta });
-  }
-
-  return saveMemory({ userId, kind: 'personal', text, metadata: { preferred_language: normalized } });
-}
-
-async function readPreferredLanguage({ userId }) {
-  const res = await query(
-    `SELECT metadata->>'preferred_language' AS language
-     FROM user_memory
-     WHERE user_id = $1 AND kind = 'personal' AND (metadata->>'preferred_language') IS NOT NULL
-     ORDER BY created_at DESC LIMIT 1`,
-    [userId]
-  );
-  return { language: (res.rows[0] && res.rows[0].language) || null };
-}
+const { embedText } = require('./embed');
 
 async function createChatSession({ userId, title }) {
   const res = await query(
@@ -96,24 +10,116 @@ async function createChatSession({ userId, title }) {
   return { id: res.rows[0].id };
 }
 
-async function addSpokenLanguage({ userId, language }) {
-  const sel = await query(
-    `SELECT id, metadata FROM user_memory
-     WHERE user_id = $1 AND kind = 'personal'
-       AND ((metadata ? 'language_history') OR (metadata->>'preferred_language') IS NOT NULL)
-     ORDER BY created_at DESC LIMIT 1`,
+// addSpokenLanguage removed
+
+// ---------- Chat message persistence (single row per session_id,user_id with JSON conversation) ----------
+async function addChatMessage({ sessionId, userId, role, content }) {
+  const sid = sessionId || null;
+  const uid = userId || null;
+  const roleNorm = String(role || 'user').toLowerCase() === 'assistant' ? 'model' : 'user';
+  const text = String(content || '');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Ensure row exists and lock it
+    await client.query(
+      `INSERT INTO chat_message (session_id, user_id, role, content, updated_at)
+       VALUES ($1, $2, 'system', '[]'::jsonb, now())
+       ON CONFLICT (session_id, user_id) DO NOTHING`,
+      [sid, uid]
+    );
+    const sel = await client.query(
+      `SELECT content FROM chat_message WHERE session_id = $1 AND user_id = $2 FOR UPDATE`,
+      [sid, uid]
+    );
+    let messages = [];
+    try {
+      const c = sel.rows && sel.rows[0] ? sel.rows[0].content : [];
+      if (Array.isArray(c)) messages = c; else if (typeof c === 'string') messages = JSON.parse(c || '[]'); else if (c && typeof c === 'object') messages = JSON.parse(JSON.stringify(c));
+    } catch (_) { messages = []; }
+
+    // Compute turn
+    const nowIso = new Date().toISOString();
+    let turn = 1;
+    if (roleNorm === 'model') {
+      const modelCount = messages.reduce((n, m) => n + (m && m.role === 'model' ? 1 : 0), 0);
+      turn = modelCount + 1;
+    } else {
+      const last = messages[messages.length - 1];
+      turn = (last && typeof last.turn === 'number' && last.turn > 0) ? last.turn : 1;
+    }
+    messages.push({ turn, role: roleNorm, text, at: nowIso });
+
+    // Save back
+    await client.query(
+      `UPDATE chat_message SET content = $3::jsonb, updated_at = now() WHERE session_id = $1 AND user_id = $2`,
+      [sid, uid, JSON.stringify(messages)]
+    );
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function getRecentMessages({ sessionId, n = 50 }) {
+  const res = await query(
+    `SELECT id, session_id, user_id, role, content, created_at
+       FROM chat_message
+      WHERE session_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [sessionId, Math.min(Math.max(n, 1), 200)]
+  );
+  return res.rows;
+}
+
+async function saveSessionSummary({ sessionId, userId, summary, nextPrompt }) {
+  const res = await query(
+    `INSERT INTO chat_session_summary (session_id, user_id, summary, next_prompt, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (session_id, user_id)
+     DO UPDATE SET summary = EXCLUDED.summary, next_prompt = EXCLUDED.next_prompt, updated_at = now()
+     RETURNING id, session_id, user_id, summary, next_prompt, created_at, updated_at`,
+    [sessionId || null, userId || null, String(summary || ''), nextPrompt || null]
+  );
+  return res.rows[0];
+}
+
+async function readLatestSummary({ userId }) {
+  const res = await query(
+      `SELECT id, session_id, summary, next_prompt, created_at
+          FROM chat_session_summary
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [userId]
+    );
+  return res.rows[0] || null;
+}
+
+// Preferred language (Postgres)
+async function readPreferredLanguagePg({ userId }) {
+  const res = await query(
+    `SELECT preferred_language FROM user_language WHERE user_id = $1`,
     [userId]
   );
+  return { language: (res.rows[0] && res.rows[0].preferred_language) || null };
+}
+
+async function setPreferredLanguagePg({ userId, language }) {
   const normalized = String(language || '').trim();
-  if (!sel.rows[0]) {
-    return saveMemory({ userId, kind: 'personal', text: 'language_profile', metadata: { language_history: [normalized] } });
-  }
-  const mem = sel.rows[0];
-  const meta = Object.assign({}, mem.metadata || {});
-  const history = Array.isArray(meta.language_history) ? meta.language_history.slice() : [];
-  if (!history.includes(normalized)) history.push(normalized);
-  meta.language_history = history;
-  return editMemory({ id: mem.id, userId, metadata: meta });
+  if (!userId || !normalized) throw new Error('userId and language are required');
+  await query(
+    `INSERT INTO user_language (user_id, preferred_language, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (user_id) DO UPDATE SET preferred_language = EXCLUDED.preferred_language, updated_at = now()`,
+    [userId, normalized]
+  );
+  return { ok: true };
 }
 
 /* ---------- New: users + KB helpers ---------- */
@@ -207,8 +213,9 @@ async function retrieveKb({ kbId, queryText, topK = 8 }) {
 }
 
 module.exports = {
-  retrieveMemories, saveMemory, editMemory,
-  setPreferredLanguage, readPreferredLanguage, addSpokenLanguage,
   createUser, createKb, kbAddText, retrieveKb,
-  createChatSession
+  createChatSession,
+  addChatMessage, getRecentMessages,
+  saveSessionSummary, readLatestSummary,
+  readPreferredLanguagePg, setPreferredLanguagePg
 };

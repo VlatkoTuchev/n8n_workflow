@@ -15,21 +15,36 @@ CREATE TABLE IF NOT EXISTS chat_session (
   created_at timestamptz DEFAULT now()
 );
 
--- Personal long-term memory
-CREATE TABLE IF NOT EXISTS user_memory (
+-- Complete message log for sessions
+CREATE TABLE IF NOT EXISTS chat_message (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-  kind text NOT NULL CHECK (kind IN ('personal','learning','task','kb')),
-  text text NOT NULL,
-  embedding vector(1536) NOT NULL,
-  metadata jsonb DEFAULT '{}'::jsonb,
+  session_id uuid REFERENCES chat_session(id) ON DELETE CASCADE,
+  user_id uuid REFERENCES app_user(id) ON DELETE SET NULL,
+  role text,
+  content jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE(session_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS chat_message_session_idx ON chat_message(session_id, created_at DESC);
+
+-- Per-session summarization persisted for continuity across logins
+CREATE TABLE IF NOT EXISTS chat_session_summary (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id uuid REFERENCES chat_session(id) ON DELETE CASCADE,
+  user_id uuid REFERENCES app_user(id) ON DELETE SET NULL,
+  summary text NOT NULL,
+  next_prompt text,
   created_at timestamptz DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS user_memory_user_id_idx ON user_memory(user_id);
-CREATE INDEX IF NOT EXISTS user_memory_kind_idx ON user_memory(user_id, kind);
-CREATE INDEX IF NOT EXISTS user_memory_embedding_idx
-  ON user_memory USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-CREATE INDEX IF NOT EXISTS user_memory_meta_gin ON user_memory USING gin (metadata);
+CREATE INDEX IF NOT EXISTS chat_session_summary_user_idx ON chat_session_summary(user_id, created_at DESC);
+
+-- User preferred language per account (Postgres)
+CREATE TABLE IF NOT EXISTS user_language (
+  user_id uuid PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
+  preferred_language text NOT NULL,
+  updated_at timestamptz DEFAULT now()
+);
 
 -- Knowledge base
 CREATE TABLE IF NOT EXISTS kb (

@@ -466,6 +466,7 @@
                 remoteAudioEl.crossOrigin = 'anonymous';
                 remoteAudioEl.style.display = 'none';
                 document.body.appendChild(remoteAudioEl);
+                let remoteAudioAttached = false;
                 const ensurePlayback = async () => {
                     try { await remoteAudioEl.play(); } catch (err) {
                         console.warn('Autoplay blocked, requesting user gesture to start audio');
@@ -480,20 +481,19 @@
                 };
 
                 pc.ontrack = (event) => {
+                    if (remoteAudioAttached) return; // prevent double attachment/echo
                     const [stream] = event.streams;
-                    if (stream) {
-                    console.log('Received remote track with', stream.getAudioTracks().length, 'audio tracks');
-                        // Force attach the first audio track to ensure audio renders
-                        const audioTracks = stream.getAudioTracks();
-                        if (audioTracks && audioTracks.length > 0) {
-                            const forced = new MediaStream();
-                            forced.addTrack(audioTracks[0]);
-                            remoteAudioEl.srcObject = forced;
-                        } else {
-                    remoteAudioEl.srcObject = stream;
-                        }
-                        ensurePlayback();
+                    if (!stream) return;
+                    const audioTracks = stream.getAudioTracks();
+                    if (audioTracks && audioTracks.length > 0) {
+                        const forced = new MediaStream();
+                        forced.addTrack(audioTracks[0]);
+                        remoteAudioEl.srcObject = forced;
+                    } else {
+                        remoteAudioEl.srcObject = stream;
                     }
+                    remoteAudioAttached = true;
+                    ensurePlayback();
                 };
 
                 pc.oniceconnectionstatechange = () => console.log('ICE state:', pc.iceConnectionState);
@@ -569,6 +569,18 @@
                         description: 'Switch the 3D avatar to walking animation',
                         parameters: { type: 'object', properties: {}, additionalProperties: false },
                     },
+                    // record_negation removed
+                    {
+                        type: 'function',
+                        name: 'read_latest_summary',
+                        description: 'Read the most recent session summary for continuity',
+                        parameters: {
+                            type: 'object',
+                            properties: { userId: { type: 'string' } },
+                            required: ['userId'],
+                            additionalProperties: false
+                        }
+                    },
                     {
                         type: 'function',
                         name: 'set_dance',
@@ -580,55 +592,6 @@
                         name: 'set_fight',
                         description: 'Switch the 3D avatar to boxing/fighting animation',
                         parameters: { type: 'object', properties: {}, additionalProperties: false },
-                    },
-                    {
-                        type: 'function',
-                        name: 'retrieve_memories',
-                        description: 'Retrieve personalized knowledge for the current user from the vector DB',
-                        parameters: {
-                            type: 'object',
-                            properties: {
-                                userId: { type: 'string', description: 'UUID of the current user' },
-                                queryText: { type: 'string', description: 'Natural language query to search' },
-                                topK: { type: 'number', description: 'Max results to return (1-20)' },
-                                kind: { type: 'string', enum: ['personal','learning','task','kb'], description: 'Optional memory namespace' }
-                            },
-                            required: ['userId','queryText'],
-                            additionalProperties: false
-                        }
-                    },
-                    {
-                        type: 'function',
-                        name: 'save_memory',
-                        description: 'Store a new memory for the current user in the vector DB',
-                        parameters: {
-                            type: 'object',
-                            properties: {
-                                userId: { type: 'string', description: 'UUID of the current user' },
-                                kind: { type: 'string', enum: ['personal','learning','task','kb'] },
-                                text: { type: 'string', description: 'Text to embed and store' },
-                                metadata: { type: 'object', description: 'Optional metadata object' }
-                            },
-                            required: ['userId','kind','text'],
-                            additionalProperties: true
-                        }
-                    },
-                    {
-                        type: 'function',
-                        name: 'edit_memory',
-                        description: 'Edit an existing memory for the current user',
-                        parameters: {
-                            type: 'object',
-                            properties: {
-                                id: { type: 'string', description: 'Memory UUID' },
-                                userId: { type: 'string', description: 'UUID of the current user' },
-                                text: { type: 'string' },
-                                kind: { type: 'string', enum: ['personal','learning','task','kb'] },
-                                metadata: { type: 'object' }
-                            },
-                            required: ['id','userId'],
-                            additionalProperties: true
-                        }
                     },
                     {
                         type: 'function',
@@ -658,20 +621,22 @@
                         // Disable VAD initially to avoid premature auto-responses before we finish the greeting
                         turn_detection: null,
                         instructions: [
+                            // Session start control
+                            'Do not speak automatically on session start. Wait for the client\'s first response.create after it loads user context.',
+                            // Conversational guardrails
+                            'Use the prior session summary (when provided) purely as opening context. Do not jump mid-conversation; first acknowledge and reconnect to that context briefly, then proceed.',
+                            'Vary your first sentence each session. Avoid stock greetings like “Hello there”. Choose a natural opener that fits the summary and time-of-day, e.g., “Good to see you back”, “Welcome again”, “Nice to pick up from last time”, or a short observational remark. Keep it short and friendly.',
+                            'In the first turn: (1) greet naturally; (2) weave in one short nod to the prior session (1 sentence), not a recap; (3) ask one concise, motivating check-in question about continuing or adjusting the plan. Total 2–3 short sentences.',
                             // Avatar control
-                            'You control a single on-screen avatar. When the user says walk/resume, call set_walk; for dance call set_dance; for fight/box call set_fight.',
-                            // Language preference
-                            'Language policy: Use stored preferred language by default. You may change languages automatically only when BOTH of the last two user utterances (≥3 words each) are clearly in the new language; otherwise ask for confirmation first. If the user explicitly requests a switch (e.g., “switch to English”, “префрли на македонски”), switch immediately. Call set_preferred_language with a single-word language and continue speaking in it. You can switch languages multiple times in a row if the user is speaking in those languages and also call the tool set_preferred_language to change the language.',
-                            // Retrieve-before-answer
-                            'Before speaking a substantive answer, first call retrieve_memories with the latest user transcript as queryText. Use the most relevant 1-3 results to personalize the reply (e.g., greet by name, mention interests, goals).',
-                            // Start-of-session behavior
-                            'On session start, greet the user by name if known, speak in their preferred language if stored, mention a relevant recent topic or course from their memories (e.g., yesterday\'s session), and ask a warm, concise check-in question (e.g., “How did it go? Want to continue?”). During this first greeting, do not switch languages mid-turn.',
-                            // Ask-then-save when missing
-                            'If retrieve_memories returns nothing clearly relevant, ask one warm, concise follow-up to gather the missing detail (e.g., their name, interests, goals, or language). When the user answers, call save_memory to record it and continue the conversation. After saving, you may say a short phrase like “Nice, I will remember that.” Do not describe databases or tools.',
-                            // Quiet saving policy
-                            'Quiet memory policy: Save only meaningful personal profile details or learning preferences/goals. Prefer kind=personal for identity/preferences (e.g., name, preferred language); kind=learning for topics and study goals. Avoid saving short commands or generic phrases.',
+                            'You control one on‑screen avatar. When the user says walk/resume, call set_walk; for dance call set_dance; for fight/box call set_fight.',
+                            // Language
+                            'Speak in the stored preferred_language if available. Do not switch languages mid‑turn. Switch only on explicit request or with two consecutive user turns in another language, and confirm first. After confirmation, call set_preferred_language.',
+                            // Corrections
+                            'If the user corrects a stored fact, acknowledge briefly and continue without repeating the wrong fact.',
+                            // Memory hygiene
+                            'Save only meaningful personal or learning preferences. Avoid saving trivial commands or filler.',
                             // Tone
-                            'Tone: motivational, engaging, encouraging, and user-centric. Keep spoken responses concise and natural.'
+                            'Tone: warm, upbeat, human, and concise. Vary word choice to avoid repetition.'
                         ].join(' ')
                     }
                 }));
@@ -687,18 +652,32 @@
                     return '00000000-0000-4000-8000-000000000000';
                 }
 
-                async function getOrCreateSessionId(userId) {
-                    const KEY = 'chat_session_id';
-                    const existing = localStorage.getItem(KEY);
-                    if (existing) return existing;
+                function getSessionId() {
+                    return sessionStorage.getItem('chat_session_id');
+                }
+                async function startNewSessionForUser(userId, title = 'WebRTC Session') {
                     const resp = await fetch('/tools/execute', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: 'create_chat_session', arguments: { userId, title: 'WebRTC Session' } })
+                        body: JSON.stringify({ name: 'create_chat_session', arguments: { userId, title } })
                     }).then(r => r.json()).catch(() => null);
-                    if (resp && resp.id) { localStorage.setItem(KEY, resp.id); return resp.id; }
+                    if (resp && resp.id) { sessionStorage.setItem('chat_session_id', resp.id); return resp.id; }
                     return 'local-demo-session';
                 }
+
+                // Heartbeat to keep session active for idle summarizer
+                setInterval(async () => {
+                    try {
+                        const uid = await getUserId();
+                        if (!uid) return;
+                        const sid = await getOrCreateSessionId(uid);
+                        await fetch('/sessions/heartbeat', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ sessionId: sid })
+                        });
+                    } catch (_) {}
+                }, 30000);
 
                 // Accumulate streamed tool/function arguments by call_id
                 const pendingArgs = Object.create(null);
@@ -709,6 +688,7 @@
                 let lastUserSpeechMs = 0;
                 let initialGreetingSent = false;
                 let initialGreetingDone = false;
+                let greetingInProgress = true; // block initial speech until context is fetched
                 let currentPreferredLanguage = null;
                 let languageUpdateInProgress = false;
                 let pendingToolFollowUp = false;
@@ -717,12 +697,46 @@
                 let pendingPreferredLanguage = null;
                 const processedToolCallIds = new Set();
                 let responseRequested = false; // NEW: prevents double response.create
+                let lastFillerMs = 0; // debounce filler speech
+
+                // Client-side idle finalizer as a safety net for inactivity
+                const CLIENT_IDLE_MS = Math.max(60000, Number(window.CLIENT_IDLE_MS || 5 * 60 * 1000));
+                let idleSummarySent = false;
+                let idleTimer = null;
+                async function finalizeSessionForIdle() {
+                    if (idleSummarySent) return;
+                    try {
+                        const uid = await getUserId(); if (!uid) return;
+                        let sid = getSessionId(); if (!sid) sid = await startNewSessionForUser(uid);
+                        await fetch('/sessions/finalize', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ sessionId: sid })
+                        }).catch(() => {});
+                        idleSummarySent = true;
+                    } catch (_) {}
+                }
+                function resetIdleTimer() {
+                    try { if (idleTimer) clearTimeout(idleTimer); } catch (_) {}
+                    idleTimer = setTimeout(finalizeSessionForIdle, CLIENT_IDLE_MS);
+                }
 
                 function requestResponseSafe() {
+                    if (greetingInProgress) { queuedResponse = true; return; }
                     if (isResponseActive || responseRequested) { queuedResponse = true; return; }
                     responseRequested = true;
                     dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'] } }));
                     queuedResponse = false;
+                }
+
+                // One-shot waiters for session.updated acknowledgements
+                const sessionUpdateWaiters = [];
+
+                function waitForSessionUpdated(timeoutMs = 1500) {
+                    return new Promise((resolve) => {
+                        const timer = setTimeout(() => resolve(false), Math.max(200, timeoutMs));
+                        sessionUpdateWaiters.push(() => { try { clearTimeout(timer); } catch (_) {} resolve(true); });
+                    });
                 }
 
                 const toolHandler = async (evt) => {
@@ -733,9 +747,17 @@
                             const c = msg.call_id || (msg.item && (msg.item.call_id || msg.item.id)) || msg.tool_call_id || msg.id || '';
                             console.log('[Realtime msg]', msg.type, n, c);
                         }
+                        if (msg.type === 'session.updated') {
+                            try { while (sessionUpdateWaiters.length) { const fn = sessionUpdateWaiters.shift(); if (typeof fn === 'function') fn(); } } catch (_) {}
+                        }
                         if (msg.type === 'response.output_text.delta') {
                             const t = (msg.delta || msg.text || '').toString();
                             if (t) { console.log('[Text Δ]', t); assistantTextBuf += t; }
+                        }
+                        // Capture assistant spoken words transcript as fallback/source of truth
+                        if (msg.type === 'response.audio_transcript.delta') {
+                            const t = (msg.delta || msg.text || '').toString();
+                            if (t) { console.log('[Audio Transcript Δ]', t); assistantTextBuf += t; }
                         }
                         // Drop audio delta spam
                         if (msg.type === 'response.error') {
@@ -750,10 +772,11 @@
                         if (msg.type === 'response.done') {
                             isResponseActive = false;
                             responseRequested = false; // NEW
+                            resetIdleTimer();
                             if (assistantTextBuf && assistantTextBuf.trim()) {
                                 try {
                                     const uid = await getUserId();
-                                    const sid = await getOrCreateSessionId(uid);
+                                    let sid = getSessionId(); if (!sid) sid = await startNewSessionForUser(uid);
                                     await fetch('/tools/execute', {
                                       method: 'POST', headers: { 'Content-Type': 'application/json' },
                                       body: JSON.stringify({ name: 'add_chat_turn', arguments: { sessionId: sid, role: 'assistant', content: assistantTextBuf } })
@@ -787,9 +810,10 @@
                             if (msg.transcript) lastTranscript = msg.transcript;
                             hadUserSpeechInWindow = true;
                             lastUserSpeechMs = Date.now();
+                            resetIdleTimer();
                             try {
                                 const uid = await getUserId();
-                                const sid = await getOrCreateSessionId(uid);
+                                let sid = getSessionId(); if (!sid) sid = await startNewSessionForUser(uid);
                                 await fetch('/tools/execute', {
                                   method: 'POST', headers: { 'Content-Type': 'application/json' },
                                   body: JSON.stringify({ name: 'add_chat_turn', arguments: { sessionId: sid, role: 'user', content: lastTranscript } })
@@ -832,8 +856,8 @@
                             if (name === 'set_dance' && window.AvatarController?.setDance) { window.AvatarController.setDance(); }
                             if (name === 'set_fight' && window.AvatarController?.setFight) { window.AvatarController.setFight(); }
 
-                            // DB-backed tools
-                            if (name === 'retrieve_memories' || name === 'save_memory' || name === 'edit_memory' || name === 'set_preferred_language') {
+                            // DB-backed tools (trimmed: only keep set_preferred_language)
+                            if (name === 'set_preferred_language') {
                                 let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
                                 let args = {};
                                 try {
@@ -847,22 +871,19 @@
                                 // Always enforce the current user's UUID, ignoring any model-provided value
                                 const uid = await getUserId();
                                 args.userId = uid;
-
-                                if (name === 'retrieve_memories') {
-                                    if (!args.queryText) { args.queryText = lastTranscript || 'recent user context'; }
-                                    if (args.topK == null) { args.topK = 6; }
-                                }
                                 try {
-                                    // Attach a human-readable label to metadata when saving
-                                    if (name === 'save_memory') {
-                                        if (!args.text) { args.text = lastTranscript ? lastTranscript : 'user preference/update'; }
-                                        if (!args.kind) {
-                                            const t = (args.text || lastTranscript || 'preference').toLowerCase();
-                                            const learningKeywords = ['learn', 'study', 'course', 'class', 'university', 'school', 'python', 'data', 'ai', 'design', 'marketing'];
-                                            const isLearning = learningKeywords.some(k => t.includes(k));
-                                            args.kind = isLearning ? 'learning' : 'personal';
-                                        }
-                                        args.metadata = Object.assign({ user_label: 'user_1_test' }, args.metadata || {});
+                                    // Ask the model to speak a short natural acknowledgement in user's language while tools run (no hardcoded phrases)
+                                    const nowMs = Date.now();
+                                    if (!greetingInProgress && !isResponseActive && !responseRequested && (nowMs - lastFillerMs > 1000)) {
+                                        responseRequested = true; // guard against overlap until response.created arrives
+                                        dc.send(JSON.stringify({
+                                            type: 'response.create',
+                                            response: {
+                                                modalities: ['audio','text'],
+                                                instructions: 'In the same language as the user\'s last utterance, speak a single short acknowledgement (0.5–1.2s) like a natural “one moment” and then continue processing silently. Do not mention tools or thinking.'
+                                            }
+                                        }));
+                                        lastFillerMs = nowMs;
                                     }
                                     if (name === 'set_preferred_language') {
                                         // Require language to be provided by the model (single word). No client defaults.
@@ -917,43 +938,34 @@
                 async function fetchUserContextForGreeting() {
                     try {
                         const userId = await getUserId();
-                        const queryText = 'preferred language name last session course progress interests learning topics';
-                        const resp = await fetch('/tools/execute', {
+                        // Fetch latest session summary for continuity
+                        const last = await fetch('/tools/execute', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name: 'retrieve_memories', arguments: { userId, queryText, topK: 8 } })
-                        }).then(r => r.json());
-                        const results = Array.isArray(resp && resp.results) ? resp.results : [];
-                        let preferredLanguage = null;
-                        let userName = null;
-                        let recentTopic = null;
-                        for (const r of results) {
-                            const meta = r && (r.metadata || r.metadata_json) ? (r.metadata || r.metadata_json) : {};
-                            if (!preferredLanguage && meta && typeof meta.preferred_language === 'string' && meta.preferred_language.trim()) {
-                                preferredLanguage = meta.preferred_language.trim();
-                            }
-                            const t = (r && r.text) ? String(r.text) : '';
-                            if (!preferredLanguage) {
-                                const m = t.match(/preferred[_\s-]?language\s*[:=]\s*([A-Za-zÀ-ÖØ-öø-ÿ\- ]{2,30})/i);
-                                if (m && m[1]) preferredLanguage = m[1].trim();
-                            }
-                            if (!userName) {
-                                let m = t.match(/my\s+name\s+is\s+([A-Za-zÀ-ÖØ-öø-ÿ'`-]{2,40})/i);
-                                if (!m) m = t.match(/моето\s+име\s+е\s+([\p{L}'`-]{2,40})/iu);
-                                if (!m) m = t.match(/mi\s+nombre\s+es\s+([A-Za-zÀ-ÖØ-öø-ÿ'`-]{2,40})/i);
-                                if (m && m[1]) userName = m[1].trim();
-                            }
-                            if (!recentTopic && (r.kind === 'learning' || /course|lesson|module|learning|study|marketing|python|design|ai/i.test(t))) {
-                                recentTopic = t.length > 160 ? t.slice(0, 160) + '…' : t;
-                            }
-                        }
-                        // Server-confirm preferred language to avoid stale text vs metadata divergence
-                        const confirm = await fetch('/tools/execute', {
+                            body: JSON.stringify({ name: 'read_latest_summary', arguments: { userId } })
+                        }).then(r => r.json()).catch(() => ({}));
+                        const summaryRow = last && last.summary ? last.summary : null;
+                        // Fetch preferred language from Postgres
+                        const lang = await fetch('/tools/execute', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ name: 'read_preferred_language', arguments: { userId } })
                         }).then(r => r.json()).catch(() => ({}));
-                        if (confirm && confirm.language) preferredLanguage = confirm.language;
+                        const preferredLanguage = (lang && lang.language) || null;
+                        const userName = null;
+                        const recentTopic = summaryRow ? summaryRow.summary : null;
+                        // After recentTopic is gathered from DB, reinforce it into session context immediately
+                        try {
+                            if (recentTopic) {
+                                const trimmed = String(recentTopic).slice(0, 900);
+                                dc.send(JSON.stringify({
+                                    type: 'session.update',
+                                    session: { instructions: `Prior session summary (for continuity): ${trimmed}` }
+                                }));
+                                // Wait briefly for the session.updated ack so the model has context before first speech
+                                await waitForSessionUpdated(1500);
+                            }
+                        } catch (_) {}
                         return { preferredLanguage, userName, recentTopic };
                     } catch (_) {
                         return { preferredLanguage: null, userName: null, recentTopic: null };
@@ -961,7 +973,13 @@
                 }
 
                 (async () => {
+                    greetingInProgress = true;
+                    const uid = await getUserId();
+                    // Always start a fresh session on page load/login
+                    await startNewSessionForUser(uid);
+                    // STEP 1: retrieve user context first
                     const ctx = await fetchUserContextForGreeting();
+                    // STEP 2: now speak the greeting using that context
                     const parts = [];
                     if (ctx.preferredLanguage) {
                         parts.push(`Speak strictly in ${ctx.preferredLanguage} for this greeting (do not switch languages mid-turn). Use this language as output_language.`);
@@ -970,22 +988,24 @@
                         parts.push('Speak strictly in English for this greeting (do not switch languages mid-turn). Use this language as output_language.');
                         currentPreferredLanguage = 'English';
                     }
+                    if (ctx.recentTopic) {
+                        parts.push(`Context from last summary: ${ctx.recentTopic}`);
+                    }
                     if (ctx.userName) {
                         parts.push(`Greet the user by name: ${ctx.userName}.`);
-                        } else {
+                    } else {
                         parts.push('If you do not know the name, ask their name in one short sentence.');
                     }
-                    if (ctx.recentTopic) {
-                        parts.push('Briefly reference a recent topic/course from memories and ask a warm check-in like “How did it go? Want to continue today?”');
-                    } else {
-                        parts.push('Ask one warm, concise check-in about what they were learning recently and whether they want to continue.');
-                    }
+                    parts.push('Ask one warm, concise check-in about what they were learning recently and whether they want to continue.');
                     parts.push('Keep it concise, motivational, and engaging.');
                     initialGreetingSent = true;
+                    responseRequested = true; // guard against race with other queued sends
                     dc.send(JSON.stringify({
                         type: 'response.create',
                         response: { modalities: ['audio','text'], instructions: parts.join(' ') }
                     }));
+                    greetingInProgress = false;
+                    resetIdleTimer();
                 })();
 
                 // Removed retry greeting to avoid double speech and language drift
@@ -996,16 +1016,76 @@
 
         window.addEventListener('DOMContentLoaded', async () => {
             startOpenAIRealtime();
-            // pre-create user + session for logging
-            const uid = await (window.getUserId ? getUserId() : Promise.resolve(null));
-            if (uid) { await getOrCreateSessionId(uid); }
+            // pre-create user + session for logging (avoid overwriting existing sessionId)
+            const uid = await (typeof getUserId === 'function' ? getUserId() : Promise.resolve(null));
+            if (uid && !getSessionId()) { await startNewSessionForUser(uid); }
             const btn = document.getElementById('logoutBtn');
             if (btn) {
-                btn.addEventListener('click', async () => {
+                btn.addEventListener('click', async (e) => {
+                    try { e.preventDefault(); } catch (_) {}
+                    try {
+                        // Ensure the session is finalized and summary saved before logout
+                        await summarizeAndSave();
+                    } catch (_) {}
                     try { await fetch('/auth/logout', { method: 'POST' }); } catch (_) {}
+                    try { sessionStorage.removeItem('chat_session_id'); } catch (_) {}
                     location.href = '/login';
                 });
             }
+            // Background session summary on page exit
+            let finalizationInProgress = false;
+            let finalizationCompleted = false;
+            const summarizeAndSave = async () => {
+                try {
+                    if (finalizationCompleted || finalizationInProgress) return;
+                    finalizationInProgress = true;
+                    let sessionId = getSessionId();
+                    if (!sessionId && typeof getUserId === 'function') {
+                        const uid2 = await getUserId();
+                        if (uid2) sessionId = await startNewSessionForUser(uid2);
+                    }
+                    if (!sessionId) { finalizationInProgress = false; return; }
+                    // Ask server to finalize using full Redis buffer
+                    console.log('[summary] finalize: start', { sessionId });
+                    let ok = false;
+                    try {
+                        const resp = await fetch('/sessions/finalize', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ sessionId }),
+                            keepalive: true
+                        });
+                        const data = await resp.json().catch(() => ({}));
+                        console.log('[summary] finalize: server response', data);
+                        ok = !!(data && (data.ok === true));
+                    } catch (e) {
+                        console.warn('[summary] finalize error', e);
+                    }
+                    if (!ok && navigator.sendBeacon) {
+                        try {
+                            const blob = new Blob([JSON.stringify({ sessionId })], { type: 'application/json' });
+                            navigator.sendBeacon('/sessions/finalize', blob);
+                            ok = true;
+                        } catch (_) { /* ignore */ }
+                    }
+                    if (!ok) {
+                        try {
+                            const xhr = new XMLHttpRequest();
+                            xhr.open('POST', '/sessions/finalize', false);
+                            xhr.setRequestHeader('Content-Type', 'application/json');
+                            xhr.send(JSON.stringify({ sessionId }));
+                            ok = true;
+                        } catch (_) {}
+                    }
+                    if (ok) finalizationCompleted = true;
+                } catch (_) {}
+                finally { finalizationInProgress = false; }
+            };
+            // Fire on tab close/navigation
+            window.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') summarizeAndSave(); });
+            window.addEventListener('pagehide', summarizeAndSave);
+            window.addEventListener('beforeunload', summarizeAndSave);
+            window.addEventListener('unload', summarizeAndSave);
         });
     </script>
 </body>
