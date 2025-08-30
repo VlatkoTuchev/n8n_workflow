@@ -716,7 +716,7 @@ app.post('/tools/execute', authRequired, async (req, res) => {
         return res.json({ ok: true, ...result });
       }
       console.log('[summary] saving raw summary for session', sessionId, 'user', authedUserId);
-      const out = await saveSessionSummary({ sessionId, userId: authedUserId, summary, nextPrompt });
+      const out = await saveSessionSummary({ sessionId, userId: authedUserId, summary });
       console.log('[summary] saved id', out.id);
       return res.json({ ok: true, id: out.id });
     }
@@ -899,9 +899,29 @@ async function summarizeAndSaveSession(sessionId, userId) {
   }
   console.log('[summary] transcript_ready', { sessionId, userId, length: transcript.length, preview: transcript.slice(0, 180) });
 
-  // 3) Ask OpenAI for a concise summary and a Next: line
-  const sys = 'You write concise narrative session summaries (5–8 sentences). End with a final line that begins with "Next:" followed by one short sentence proposing how to continue next time. Do not include bullet points or lists.';
-  const prompt = `Summarize the following conversation. ${userId ? `User ID: ${userId}.` : ''}\n\nConversation:\n${transcript}`;
+  // 3) Ask OpenAI for a cumulative summary: last N dated summaries + this transcript
+  let priorSummaries = '';
+  try {
+    const hist = await query(
+      `SELECT summary, created_at FROM chat_session_summary
+         WHERE user_id = $1 AND summary IS NOT NULL
+         ORDER BY created_at DESC
+         LIMIT 15`,
+      [userId || null]
+    );
+    if (hist && hist.rows && hist.rows.length) {
+      const nowMs = Date.now();
+      priorSummaries = hist.rows.map((r, i) => {
+        const ts = r.created_at ? new Date(r.created_at) : null;
+        const iso = ts ? ts.toISOString().slice(0,10) : 'unknown-date';
+        let age = '';
+        try { if (ts) { const d = Math.floor((nowMs - ts.getTime())/86400000); age = ` (${d}d ago)`; } } catch(_) {}
+        return `[${iso}] S${i+1}${age}: ${String(r.summary || '').trim()}`;
+      }).join('\n\n');
+    }
+  } catch (_) {}
+  const sys = 'You create concise cumulative user memories (8–12 sentences). Input includes prior dated summaries (most recent first) and the current transcript. Task: merge into ONE durable memory that captures stable facts, preferences, goals, progress, and open questions. Prefer the newest information when conflicts arise. Avoid chit‑chat, instructions, and duplication. Do not greet, do not ask questions, and do not include a "Next:" line. This output is an internal memory note for the assistant to consult later; it is not an assistant reply.';
+  const prompt = `${userId ? `User ID: ${userId}.` : ''}\n\nPrior dated summaries (most recent first; up to 15):\n${priorSummaries || '(none)'}\n\nCurrent conversation transcript:\n${transcript}\n\nWrite one cumulative memory now:`;
   const model = process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o';
   const completion = await openai.chat.completions.create({
     model,
@@ -914,15 +934,13 @@ async function summarizeAndSaveSession(sessionId, userId) {
   });
   const summaryText = (completion.choices?.[0]?.message?.content || '').trim();
   if (!summaryText) return { saved: false, reason: 'summary_failed' };
-  let nextPrompt = null;
-  const m = summaryText.match(/\bNext:\s*(.+)$/mi);
-  if (m) nextPrompt = m[1].trim();
-  console.log('[summary] model_returned', { len: summaryText.length, nextPrompt });
+  const nextPrompt = null; // Explicitly disable "Next:" handling per new spec
+  console.log('[summary] model_returned', { len: summaryText.length });
 
   // 4) Persist via UPSERT and return stored row
-  const saved = await saveSessionSummary({ sessionId, userId, summary: summaryText, nextPrompt });
+  const saved = await saveSessionSummary({ sessionId, userId, summary: summaryText });
   console.log('[summary] saved_row', { id: saved.id, sessionId: saved.session_id, userId: saved.user_id, updated_at: saved.updated_at });
-  return { saved: true, id: saved.id, summary: saved.summary, nextPrompt: saved.next_prompt };
+  return { saved: true, id: saved.id, summary: saved.summary };
 }
 app.post('/sessions/heartbeat', authRequired, async (req, res) => {
   try {

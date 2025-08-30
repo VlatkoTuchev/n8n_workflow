@@ -77,14 +77,14 @@ async function getRecentMessages({ sessionId, n = 50 }) {
   return res.rows;
 }
 
-async function saveSessionSummary({ sessionId, userId, summary, nextPrompt }) {
+async function saveSessionSummary({ sessionId, userId, summary }) {
   const res = await query(
-    `INSERT INTO chat_session_summary (session_id, user_id, summary, next_prompt, updated_at)
-     VALUES ($1, $2, $3, $4, now())
+    `INSERT INTO chat_session_summary (session_id, user_id, summary, updated_at)
+     VALUES ($1, $2, $3, now())
      ON CONFLICT (session_id, user_id)
-     DO UPDATE SET summary = EXCLUDED.summary, next_prompt = EXCLUDED.next_prompt, updated_at = now()
-     RETURNING id, session_id, user_id, summary, next_prompt, created_at, updated_at`,
-    [sessionId || null, userId || null, String(summary || ''), nextPrompt || null]
+     DO UPDATE SET summary = EXCLUDED.summary, updated_at = now()
+     RETURNING id, session_id, user_id, summary, created_at, updated_at`,
+    [sessionId || null, userId || null, String(summary || '')]
   );
   return res.rows[0];
 }
