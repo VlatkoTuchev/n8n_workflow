@@ -525,8 +525,22 @@
                 let openAiSessionToken = '';
                 let hasHistory = true;
                 let sessionPreferredVoice = null;
+                let wasPostSettingsReload = false;
+                let postSettingsReloadWhy = '';
                 try {
-                    const tok = await fetch('/realtime/token').then(r => r.json()).catch(() => null);
+                    // Pass a hint if this page was just reloaded after changing agent settings
+                    let tokenUrl = '/realtime/token';
+                    try {
+                        const pr = localStorage.getItem('post_settings_reload');
+                        wasPostSettingsReload = (pr === '1');
+                        if (wasPostSettingsReload) {
+                            postSettingsReloadWhy = (localStorage.getItem('post_settings_reload_why') || '');
+                            const why = encodeURIComponent(postSettingsReloadWhy);
+                            tokenUrl = '/realtime/token?post_settings_reload=1' + (why ? `&post_settings_reload_why=${why}` : '');
+                        }
+                    } catch (_) {}
+                    const tok = await fetch(tokenUrl).then(r => r.json()).catch(() => null);
+                    try { localStorage.removeItem('post_settings_reload'); localStorage.removeItem('post_settings_reload_why'); localStorage.removeItem('post_settings_reload_ts'); } catch (_) {}
                     if (tok && tok.token) openAiSessionToken = tok.token;
                     if (tok && typeof tok.hasHistory === 'boolean') hasHistory = tok.hasHistory;
                     if (tok && tok.preferredVoice) sessionPreferredVoice = tok.preferredVoice;
@@ -1123,6 +1137,16 @@
                                         item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(resp) }
                                     }));
                                     // Do NOT try to update voice mid-conversation; ask user to refresh instead
+                                    try {
+                                        const changedVoice = !!(args && typeof args.voice === 'string' && args.voice.trim());
+                                        const changedStyle = !!(args && typeof args.style === 'string' && args.style.trim());
+                                        if (changedVoice || changedStyle) {
+                                            localStorage.setItem('post_settings_reload', '1');
+                                            const why = changedVoice && changedStyle ? 'both' : (changedVoice ? 'voice' : 'style');
+                                            localStorage.setItem('post_settings_reload_why', why);
+                                            localStorage.setItem('post_settings_reload_ts', String(Date.now()));
+                                        }
+                                    } catch (_) {}
                                     pendingRefreshNotice = true;
                                 } catch (e) {
                                     dc.send(JSON.stringify({
@@ -1137,7 +1161,7 @@
                                     try {
                                         pendingRefreshNotice = false;
                                         responseRequested = true;
-                                        dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: 'I updated your agent settings. To apply voice changes immediately, please refresh the page.' } }));
+                                        dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: 'Settings updated. Please reload the page to apply voice or style changes.' } }));
                                     } catch (_) { pendingRefreshNotice = false; }
                                 } else if (isResponseActive) {
                                     pendingToolFollowUp = true;
@@ -1197,7 +1221,14 @@
                     } else {
                         parts.push('If you do not know the name, ask their name in one short sentence.');
                     }
-                    if (!hasHistory) {
+                    if (wasPostSettingsReload) {
+                        const why = (postSettingsReloadWhy || '').toLowerCase();
+                        const what = (why === 'both') ? 'voice and style' : (why === 'style' ? 'style' : 'voice');
+                        parts.push(`POST-REFRESH CHECK: Start with a single, natural line asking if the new ${what} sounds right on their side (no re-introduction), then continue from the most recent context.`);
+                        initialGreetingSent = true;
+                        responseRequested = true;
+                        dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: parts.join(' ') } }));
+                    } else if (!hasHistory) {
                         parts.push('FIRST-CONTACT INTRO: RESPOND ONLY IN ENGLISH for this greeting. Do NOT switch languages mid-turn or afterward unless the user explicitly asks to change languages. Sound upbeat, motivating, and playfully humorous, pleasant, entertaining voice. Open with energy; introduce yourself with a friendly name (e.g., “I’m Nova”) and immediately offer to change it if they prefer in NOT so direct way. Mention you can switch to ANY language on request and that you’ll be their personal assistant here—discovering courses, checking upcoming events, recapping sessions, setting preferences and name, and fetching chat history when needed. Make the best first impression with a lively, memorable tone. End with one personable, open question to learn something about them (a hobby or current learning goal). Use 3–4 short sentences. Never begin with “Hi there” or “Hello there.”');
                         initialGreetingSent = true;
                         responseRequested = true;

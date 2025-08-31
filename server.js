@@ -304,18 +304,38 @@ app.all('/realtime/token', authRequired, async (req, res) => {
       pushSection('Open Questions', top?.open_questions);
       workingPack = lines.join('\n').trim();
     } catch (_) {}
-    // Build last 5 summaries (newest first) to provide recency without digest
+    // Build last N summaries (newest first), deduplicate near-duplicates for concision
     let recentSummariesBlock = '';
     try {
       const rs = await query(
         `SELECT summary, created_at FROM chat_session_summary
            WHERE user_id = $1 AND summary IS NOT NULL
            ORDER BY created_at DESC
-           LIMIT 5`,
+           LIMIT 6`,
         [req.user?.pgUserId || null]
       );
       if (rs && rs.rows && rs.rows.length) {
-        recentSummariesBlock = rs.rows.map((row, i) => {
+        const kept = [];
+        const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\s]+/g,' ').replace(/\s+/g,' ').trim();
+        function jaccard(a, b) {
+          const sa = new Set(a.split(' '));
+          const sb = new Set(b.split(' '));
+          const inter = new Set([...sa].filter(x => sb.has(x)));
+          const uni = new Set([...sa, ...sb]);
+          return uni.size ? inter.size / uni.size : 0;
+        }
+        for (let i = 0; i < rs.rows.length; i++) {
+          const txt = String(rs.rows[i].summary || '').trim();
+          const n = norm(txt);
+          let similar = false;
+          for (const k of kept) {
+            if (jaccard(n, k.n) >= 0.82) { similar = true; break; }
+          }
+          if (!similar) kept.push({ n, row: rs.rows[i] });
+          if (kept.length >= 3) break; // keep at most 3 distinct summaries
+        }
+        recentSummariesBlock = kept.map((rec, i) => {
+          const row = rec.row;
           const iso = row.created_at ? new Date(row.created_at).toISOString() : 'unknown-date';
           return `S${i+1} [${iso}]: ${String(row.summary || '').trim()}`;
         }).join('\n\n');
@@ -342,7 +362,7 @@ app.all('/realtime/token', authRequired, async (req, res) => {
            FROM chat_message
           WHERE user_id = $1
           ORDER BY updated_at DESC
-          LIMIT 2`,
+          LIMIT 1`,
         [req.user?.pgUserId || null]
       );
       if (rows && rows.rows && rows.rows.length) {
@@ -353,15 +373,35 @@ app.all('/realtime/token', authRequired, async (req, res) => {
           if (i === 0) lastConversationUpdatedAt = updated;
           let arr = [];
           try { arr = Array.isArray(r.content) ? r.content : JSON.parse(r.content || '[]'); } catch (_) { arr = []; }
-          // Take the last 8 turns for brevity
-          const tail = Array.isArray(arr) ? arr.slice(-8) : [];
+          // Take the last 6 turns for brevity
+          const tail = Array.isArray(arr) ? arr.slice(-6) : [];
           const lines = tail.map(m => {
             const role = (m && m.role === 'model') ? 'Assistant' : 'User';
             const text = (m && m.text != null) ? String(m.text) : String(m?.content || '');
-            return `${role}: ${text.trim()}`;
+            // Prefer local timestamp if present in stored JSON
+            const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+            let whenLocal = null;
+            if (m && typeof m.at_local === 'string' && m.at_local.trim()) {
+              whenLocal = `${m.at_local} ${tz}`;
+            } else if (m && typeof m.at === 'string' && m.at.trim()) {
+              try {
+                const d = new Date(m.at);
+                const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12: false });
+                whenLocal = `${fmt.format(d)} ${tz}`;
+              } catch(_) { whenLocal = null; }
+            }
+            const prefix = whenLocal ? `${role} [${whenLocal}]` : role;
+            return `${prefix}: ${text.trim()}`;
           });
           const iso = updated ? updated.toISOString() : 'unknown-date';
-          chunks.push(`Conversation [${iso}]\n${lines.join('\n')}`);
+          let updatedLocal = null;
+          try {
+            if (updated) {
+              updatedLocal = new Intl.DateTimeFormat('en-GB', { timeZone: String(process.env.APP_TIMEZONE || 'Europe/Skopje'), year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).format(updated);
+            }
+          } catch(_) { updatedLocal = null; }
+          const header = updatedLocal ? `Conversation [${iso} | local ${updatedLocal}]` : `Conversation [${iso}]`;
+          chunks.push(`${header}\n${lines.join('\n')}`);
         }
         recentConvosBlock = chunks.join('\n\n');
       }
@@ -412,8 +452,9 @@ First turn policy:
    - If return is very recent (minutes), acknowledge timing playfully (e.g., “you’re back fast”). If long break, acknowledge gently.
    - Greet naturally (use preferred name), then continue with one relevant detail and one inviting question or next step. Keep to 2 short sentences.
 
-Guardrails:
+  Guardrails:
    - Stay focused on the learner’s topics and progress; avoid speculation
+   - Do NOT introduce personal topics (e.g., health/fitness) unless the user raises them or they are present in the provided memory/excerpts
    - Be transparent if unsure and ask a clarifying question
    - Never claim to read private data; use only provided memory/context
    - Don’t restate the entire memory pack; weave it naturally
@@ -426,7 +467,10 @@ Guardrails:
 Tool use (if available):
    - Use get_user_context for details on upcoming/attended/favorites/quizzes when needed
    - Use set_preferred_language when the learner asks to change language
-   - For set_agent_settings (voice): You should ALWAYS use the voice that the user has set, not the default voice and also when switching you should say to the user to refresh the page so the changes apply to a new session.
+   - For set_agent_settings (name, voice, style):
+     * Always use the user's configured settings (do not fall back to defaults).
+     * After changing voice or style, explicitly tell the user to reload the page so the new settings apply to the next session. Keep it to one short line (e.g., "Settings updated — please reload the page to apply the new voice.").
+     * Do NOT claim the change is live now and do NOT say “let me know how it sounds”; changes take effect only after a reload/new session.
    - Prefer memory/digest first; use tools after the greeting and only between turns
 
 Safety & inclusion: Be culturally respectful; avoid probing sensitive info; normalize struggle; praise effort and strategy.`;
@@ -472,12 +516,46 @@ Welcome policy (FIRST CONTACT ONLY):
 - Introduce yourself with a friendly, memorable name (e.g., “Hi! I’m Nova—your learning companion”).
 - Explicitly offer to change your name if the user prefers (“If you want me to go by a different name, just tell me”).
 - In 1–2 short sentences, give an upbeat welcome and invite a first step or question.
-- Keep it natural—avoid stock phrases like “Hi there,” and vary the opening line.`
+ - Keep it natural—avoid stock phrases like “Hi there,” and vary the opening line.`
       );
     }
+    // Add recency-aware and post-reload greeting guidance (placed after core guidance to override tone)
+    try {
+      const postReload = (() => { try { const v = String(req.query?.post_settings_reload || '').toLowerCase(); return v === '1' || v === 'true' || v === 'yes'; } catch (_) { return false; } })();
+      const postReloadWhy = (() => { try { return String(req.query?.post_settings_reload_why || '').toLowerCase(); } catch (_) { return ''; } })();
+      let recencyMinutes = null;
+      if (lastConversationUpdatedAt) {
+        const diffMs = Date.now() - lastConversationUpdatedAt.getTime();
+        recencyMinutes = Math.floor(diffMs / 60000);
+      }
+      const lines = [];
+      lines.push('First-turn dynamics (recency & reload):');
+      if (postReload) {
+        const why = (postReloadWhy === 'voice' || postReloadWhy === 'style' || postReloadWhy === 'both') ? postReloadWhy : 'voice';
+        const what = (why === 'both') ? 'voice and style' : why;
+        lines.push(`- The user just reloaded after changing ${what}. Start with a brief, natural check that the new ${what} feels right (one short line), then continue without re‑introducing yourself.`);
+        lines.push('- Avoid generic greetings like “Hi there” or “Hello again.” If recent, acknowledge the quick return.');
+      }
+      if (recencyMinutes != null) {
+        lines.push(`- Last conversation updated ~${recencyMinutes} min ago. Adjust tone:`);
+        if (recencyMinutes <= 5) lines.push('  * <=5 min: note they’re back fast (1 short line), then continue.');
+        else if (recencyMinutes <= 120) lines.push('  * <=120 min: light “welcome back,” then pick up the thread immediately.');
+        else if (recencyMinutes <= 1440) lines.push('  * <=24h: warmly note the break; proceed without long recap.');
+        else lines.push('  * >24h: offer a one‑line recap or ask if they want a quick update.');
+      } else {
+        lines.push('- No timestamp available: use a concise, non‑repetitive opener and continue quickly.');
+      }
+      lines.push('- Vary openings across sessions; avoid repeating phrasing. Keep it fresh and human.');
+      insParts.push(lines.join('\n'));
+    } catch (_) {}
     const instructionsFull = insParts.join('\n\n');
     let instructions = instructionsFull;
-    const MAX_INS = 4000; if (instructions.length > MAX_INS) instructions = instructions.slice(0, MAX_INS - 3) + '...';
+    // Allow larger instruction payloads so critical recency/excerpts are preserved.
+    // Keep a generous cap to avoid pathological bloat while preserving needed context.
+    const MAX_INS = Math.max(12000, Number(process.env.MAX_INSTRUCTIONS_CHARS || 12000));
+    if (instructions.length > MAX_INS) {
+      instructions = instructions.slice(0, MAX_INS - 3) + '...';
+    }
 
     // Optional debug log of what we inject (full when debug is enabled)
     try {
@@ -491,8 +569,9 @@ Welcome policy (FIRST CONTACT ONLY):
         console.log('email:', req.user?.email || null);
         console.log('contextSummary.len:', (contextSummary || '').length);
         console.log('contextSummary.full:', contextSummary || '');
-        console.log('instructions.len:', (instructionsFull || '').length);
-        console.log('instructions.full:', instructionsFull || '');
+        console.log('instructions.len.full:', (instructionsFull || '').length);
+        console.log('instructions.len.sent:', (instructions || '').length);
+        console.log('instructions.full (unsent, pre-trim):', instructionsFull || '');
         console.log('==========================================================');
       }
     } catch (_) {}
@@ -896,37 +975,6 @@ app.post('/tools/execute', authRequired, async (req, res) => {
     // Lightweight observability to troubleshoot client → server tool calls
     try { console.log('[tools/execute]', toolName, Object.keys(args || {})); } catch (_) {}
 
-    // // Users
-    // if (toolName === 'create_user') {
-    //   // Identity is provisioned at register/login; just return the authenticated id
-    //   if (!authedUserId) return res.status(401).json({ error: 'Unauthorized' });
-    //   // Also ensure a MySQL users row exists for CDC mirroring
-    //   try { await ensureMysqlUserForEmail((req.user && req.user.email) || null, null); } catch(_) {}
-    //   return res.json({ ok: true, id: authedUserId });
-    // }
-
-    // // Knowledge base
-    // if (toolName === 'create_kb') {
-    //   const { ownerUserId, name: kbName, visibility } = args || {};
-    //   if (!kbName) return res.status(400).json({ error: 'name is required' });
-    //   const out = await createKb({ ownerUserId, name: kbName, visibility });
-    //   return res.json({ ok: true, id: out.id });
-    // }
-
-    // if (toolName === 'kb_add_text') {
-    //   const { kbId, title, text, mimeType, metadata } = args || {};
-    //   if (!kbId || !text) return res.status(400).json({ error: 'kbId and text are required' });
-    //   const out = await kbAddText({ kbId, title, text, mimeType, metadata });
-    //   return res.json({ ok: true, ...out });
-    // }
-
-    // if (toolName === 'retrieve_kb') {
-    //   const { kbId, queryText, topK } = args || {};
-    //   if (!kbId || !queryText) return res.status(400).json({ error: 'kbId and queryText are required' });
-    //   const rows = await retrieveKb({ kbId, queryText, topK });
-    //   return res.json({ ok: true, results: rows });
-    // }
-
     if (toolName === 'create_chat_session') {
       const title = (args && args.title) ? args.title : 'WebRTC Session';
       if (!authedUserId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1032,7 +1080,7 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       // Enforce: can only set own settings
       if (String(targetUserId) !== String(authedUserId)) return res.status(403).json({ error: 'forbidden' });
       await setAgentSettingsPg({ userId: targetUserId, name, voice, style });
-      return res.json({ ok: true });
+      return res.json({ ok: true, reload_required: true, message: 'Settings updated. Please reload the page to apply voice/style changes to the next session.' });
     }
 
     if (toolName === 'list_courses') {
@@ -1289,7 +1337,7 @@ async function summarizeAndSaveSession(sessionId, userId) {
       `SELECT summary, created_at FROM chat_session_summary
          WHERE user_id = $1 AND summary IS NOT NULL
          ORDER BY created_at DESC
-         LIMIT 15`,
+         LIMIT 5`,
       [userId || null]
     );
     if (hist && hist.rows && hist.rows.length) {
@@ -1303,8 +1351,8 @@ async function summarizeAndSaveSession(sessionId, userId) {
       }).join('\n\n');
     }
   } catch (_) {}
-  const sys = 'You write an internal cumulative memory note for the assistant (not a reply to the user). Merge prior dated summaries (most recent first) with the current transcript into ONE coherent memory capturing ONLY durable items: facts, preferences, goals, progress, and open questions.\n\nRules:\n- Length: 150–300 words (~900–1,400 characters).\n- No greetings, no questions, do not address the user, no instructions.\n- Prefer newest information when conflicts arise; drop the older.\n- Drop items older than ~90 days unless reaffirmed today or in the last 30 days.\n- De-duplicate paraphrases; keep the clearest single form.\n- Ignore chit‑chat, filler, and tool/procedure meta.';
-  const prompt = `${userId ? `User ID: ${userId}.` : ''}\n\nPrior dated summaries (most recent first; up to 15):\n${priorSummaries || '(none)'}\n\nCurrent conversation transcript:\n${transcript}\n\nWrite one cumulative memory now. Plain text only.`;
+  const sys = 'You write an internal cumulative memory note for the assistant (not a reply to the user). Merge prior dated summaries (most recent first) with the current transcript into ONE coherent memory capturing ONLY durable items: facts, preferences, goals, progress, and open questions.\n\nRules:\n- Length: 150–300 words (~900–1,400 characters).\n- No greetings, no questions, do not address the user, no instructions.\n- Use ONLY information explicitly present in the provided transcript OR clearly repeated in the newest prior summaries. Do NOT infer or invent new details. If unsure, omit.\n- Prefer newest information when conflicts arise; drop the older.\n- Drop items older than ~90 days unless reaffirmed today or in the last 30 days.\n- De-duplicate paraphrases; keep the clearest single form.\n- Avoid sensitive personal topics (e.g., health/fitness) unless explicitly present in the transcript.\n- Ignore chit‑chat, filler, and tool/procedure meta.';
+  const prompt = `${userId ? `User ID: ${userId}.` : ''}\n\nPrior dated summaries (most recent first; up to 5):\n${priorSummaries || '(none)'}\n\nCurrent conversation transcript:\n${transcript}\n\nWrite one cumulative memory now. Plain text only.`;
   const model = process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o';
   const completion = await openai.chat.completions.create({
     model,
@@ -1325,7 +1373,7 @@ async function summarizeAndSaveSession(sessionId, userId) {
 
   // 5) Extract atomic memory items via model and upsert; rebuild short digest
   try {
-    const extractSys = 'Extract atomic user memory items as strict JSON. Keep only stable facts, preferences, goals, progress, and open questions. Max 25 items total. No chit-chat. Schema: { items: [ { type:"fact|preference|goal|progress|open_question", statement:string, stability?:"short|med|long", pinned?:boolean } ] }.';
+    const extractSys = 'Extract atomic user memory items as strict JSON. Source of truth is ONLY the provided transcript/summary. Do NOT invent, infer, or guess. Keep only stable facts, preferences, goals, progress, and open questions explicitly stated by the user. If none, return an empty list. Max 25 items total. No chit-chat. Schema: { items: [ { type:"fact|preference|goal|progress|open_question", statement:string, stability?:"short|med|long", pinned?:boolean } ] }.';
     const extractPrompt = `Input cumulative summary (may include prior info):\n${summaryText}\n\nReturn ONLY JSON with the schema.`;
     const extract = await openai.chat.completions.create({
       model: process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o',
@@ -1338,8 +1386,17 @@ async function summarizeAndSaveSession(sessionId, userId) {
     });
     let items = [];
     try { items = JSON.parse(extract.choices?.[0]?.message?.content || '{}')?.items || []; } catch (_) { items = []; }
+    // Lightweight hallucination guard: keep items that share content words with the transcript
     if (Array.isArray(items) && items.length) {
-      await upsertUserMemoryItems(userId, items);
+      const stop = new Set(['the','a','an','and','or','but','if','then','with','of','for','to','in','on','at','by','from','is','are','was','were','it','this','that','these','those','as','be','can','could','should','would','has','have','had','do','does','did','you','your','i','we','they','he','she']);
+      const words = (s) => String(s||'').toLowerCase().replace(/[^a-z0-9\s]+/g,' ').split(/\s+/).filter(w => w && !stop.has(w) && w.length >= 4);
+      const tset = new Set(words(transcript));
+      const filtered = items.filter(it => {
+        const toks = words(it.statement);
+        // keep if any significant token appears in transcript
+        return toks.some(w => tset.has(w));
+      });
+      if (filtered.length) await upsertUserMemoryItems(userId, filtered);
     }
   } catch (e) { try { console.warn('memory extract failed', e?.message || e); } catch (_) {} }
 

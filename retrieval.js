@@ -45,8 +45,19 @@ async function addChatMessage({ sessionId, userId, role, content }) {
       if (Array.isArray(c)) messages = c; else if (typeof c === 'string') messages = JSON.parse(c || '[]'); else if (c && typeof c === 'object') messages = JSON.parse(JSON.stringify(c));
     } catch (_) { messages = []; }
 
-    // Compute turn
-    const nowIso = new Date().toISOString();
+    // Compute turn and timestamps (store UTC and convenient local info)
+    const now = new Date();
+    const nowIso = now.toISOString(); // canonical UTC
+    const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+    let atLocal = null;
+    try {
+      atLocal = new Intl.DateTimeFormat('en-GB', {
+        timeZone: tz,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+      }).format(now).replace(',', '');
+    } catch (_) { atLocal = null; }
     let turn = 1;
     if (roleNorm === 'model') {
       const modelCount = messages.reduce((n, m) => n + (m && m.role === 'model' ? 1 : 0), 0);
@@ -55,7 +66,7 @@ async function addChatMessage({ sessionId, userId, role, content }) {
       const last = messages[messages.length - 1];
       turn = (last && typeof last.turn === 'number' && last.turn > 0) ? last.turn : 1;
     }
-    messages.push({ turn, role: roleNorm, text, at: nowIso });
+    messages.push({ turn, role: roleNorm, text, at: nowIso, ts: now.getTime(), tz, at_local: atLocal });
 
     // Save back
     await client.query(
