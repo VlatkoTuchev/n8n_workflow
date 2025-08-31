@@ -1,3 +1,7 @@
+// ====================================================================================================
+// Section: MySQL pool and query helper
+// - Uses mysql2/promise; credentials via env vars (MYSQL_*). Primary source of truth data.
+// ====================================================================================================
 const mysql = require('mysql2/promise');
 
 const pool = mysql.createPool({
@@ -11,6 +15,7 @@ const pool = mysql.createPool({
   queueLimit: 0
 });
 
+// Execute a prepared statement and return rows
 async function query(sql, params) {
   const [rows] = await pool.execute(sql, params);
   return rows;

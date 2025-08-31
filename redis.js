@@ -1,8 +1,15 @@
+// ====================================================================================================
+// Section: Redis client and chat buffers
+// - Provides minimal chat buffering and session activity tracking for idle summarization
+// ====================================================================================================
 const { createClient } = require('redis');
 
 const redis = createClient({ url: process.env.REDIS_URL });
 redis.on('error', (err) => console.error('Redis error:', err));
 
+// ----------------------------------------------------------------------------------------------------
+// Connection management
+// ----------------------------------------------------------------------------------------------------
 let connected = false;
 async function connectRedis() {
   if (!connected) {
@@ -12,6 +19,9 @@ async function connectRedis() {
   return redis;
 }
 
+// ----------------------------------------------------------------------------------------------------
+// Chat buffer operations
+// ----------------------------------------------------------------------------------------------------
 async function addChatTurn(sessionId, role, content) {
   await connectRedis();
   const maxItems = Math.max(1, Number(process.env.CHAT_BUFFER_MAX || 500));
@@ -37,6 +47,9 @@ async function getFullChat(sessionId) {
   return arr.map((s) => { try { return JSON.parse(s); } catch { return null; } }).filter(Boolean);
 }
 
+// ----------------------------------------------------------------------------------------------------
+// Session activity tracking (used by idle summarizer)
+// ----------------------------------------------------------------------------------------------------
 async function setSessionActivity(sessionId, userId) {
   await connectRedis();
   const ttlSeconds = Math.max(60, Number(process.env.CHAT_BUFFER_TTL_SECONDS || 24 * 60 * 60));

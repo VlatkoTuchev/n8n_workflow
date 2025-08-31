@@ -1,7 +1,14 @@
+// ====================================================================================================
+// Section: Imports and shared helpers
+// ====================================================================================================
 const { query, pool } = require('./db');
 const crypto = require('crypto');
 const { embedText } = require('./embed');
 
+// ====================================================================================================
+// Section: Chat sessions and messages
+// - Session header and single-row JSON message storage per (session_id,user_id)
+// ====================================================================================================
 async function createChatSession({ userId, title }) {
   const res = await query(
     `INSERT INTO chat_session (user_id, title) VALUES ($1, $2) RETURNING id`,
@@ -65,6 +72,9 @@ async function addChatMessage({ sessionId, userId, role, content }) {
   }
 }
 
+// ====================================================================================================
+// Section: Summaries and preferences (Postgres)
+// ====================================================================================================
 async function getRecentMessages({ sessionId, n = 50 }) {
   const res = await query(
     `SELECT id, session_id, user_id, role, content, created_at
@@ -122,7 +132,9 @@ async function setPreferredLanguagePg({ userId, language }) {
   return { ok: true };
 }
 
-/* ---------- New: users + KB helpers ---------- */
+// ====================================================================================================
+// Section: Users + Knowledge Base (KB)
+// ====================================================================================================
 async function createUser({ email }) {
   const res = await query(
     `INSERT INTO app_user (email) VALUES ($1)
@@ -217,5 +229,176 @@ module.exports = {
   createChatSession,
   addChatMessage, getRecentMessages,
   saveSessionSummary, readLatestSummary,
-  readPreferredLanguagePg, setPreferredLanguagePg
+  readPreferredLanguagePg, setPreferredLanguagePg,
+  readAgentNamePg, setAgentNamePg,
+  readAgentSettingsPg, setAgentSettingsPg,
+  ensureMemoryTables, upsertUserMemoryItems, selectTopKUserMemory,
+  setUserDigest, getUserDigest, getRecentSummaries
 };
+
+// ====================================================================================================
+// Section: Lean memory tables & helpers
+// - user_memory and user_digest support atomic memory and rolling digest
+// ====================================================================================================
+async function ensureMemoryTables() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS user_memory (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id uuid REFERENCES app_user(id) ON DELETE CASCADE,
+      type text NOT NULL CHECK (type IN ('fact','preference','goal','progress','open_question')),
+      statement text NOT NULL,
+      first_seen date DEFAULT now(),
+      last_seen date DEFAULT now(),
+      stability text DEFAULT 'med',
+      pinned boolean DEFAULT false,
+      UNIQUE(user_id, statement)
+    );
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS user_memory_user_type_last_idx
+      ON user_memory(user_id, type, last_seen DESC);
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS user_digest (
+      user_id uuid PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
+      digest_text text,
+      updated_at timestamptz DEFAULT now()
+    );
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS user_agent_settings (
+      user_id uuid PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
+      preferred_agent_name text,
+      preferred_voice text,
+      preferred_style text,
+      updated_at timestamptz DEFAULT now()
+    );
+  `);
+  await query(`ALTER TABLE user_agent_settings ADD COLUMN IF NOT EXISTS preferred_voice text`);
+  await query(`ALTER TABLE user_agent_settings ADD COLUMN IF NOT EXISTS preferred_style text`);
+}
+
+async function upsertUserMemoryItems(userId, items = []) {
+  if (!userId || !Array.isArray(items) || items.length === 0) return { upserted: 0 };
+  let n = 0;
+  for (const it of items) {
+    const type = String(it.type || '').trim();
+    const stmt = String(it.statement || '').trim();
+    if (!type || !stmt) continue;
+    const stability = (it.stability && String(it.stability).trim()) || null;
+    const pinned = it.pinned === true;
+    await query(
+      `INSERT INTO user_memory (user_id, type, statement, stability, pinned)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (user_id, statement)
+       DO UPDATE SET last_seen = now(),
+                     stability = COALESCE(EXCLUDED.stability, user_memory.stability),
+                     pinned = GREATEST(user_memory.pinned::int, EXCLUDED.pinned::int)::boolean`,
+      [userId, type, stmt, stability, pinned]
+    );
+    n += 1;
+  }
+  return { upserted: n };
+}
+
+async function selectTopKUserMemory(userId, limits) {
+  const defs = Object.assign({ fact: 6, preference: 6, goal: 5, progress: 5, open_question: 3 }, limits || {});
+  const out = { facts: [], preferences: [], goals: [], progress: [], open_questions: [] };
+  async function grab(t, k) {
+    const res = await query(
+      `SELECT statement, pinned, stability, last_seen
+         FROM user_memory
+        WHERE user_id = $1 AND type = $2
+        ORDER BY pinned DESC,
+                 CASE stability WHEN 'long' THEN 3 WHEN 'med' THEN 2 ELSE 1 END DESC,
+                 last_seen DESC
+        LIMIT $3`,
+      [userId, t, Math.max(0, k)]
+    );
+    return res.rows || [];
+  }
+  out.facts = await grab('fact', defs.fact);
+  out.preferences = await grab('preference', defs.preference);
+  out.goals = await grab('goal', defs.goal);
+  out.progress = await grab('progress', defs.progress);
+  out.open_questions = await grab('open_question', defs.open_question);
+  return out;
+}
+
+async function setUserDigest(userId, digestText) {
+  await query(
+    `INSERT INTO user_digest (user_id, digest_text, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (user_id)
+     DO UPDATE SET digest_text = EXCLUDED.digest_text, updated_at = now()`,
+    [userId, digestText || null]
+  );
+  return { ok: true };
+}
+
+async function getUserDigest(userId) {
+  const r = await query(`SELECT digest_text FROM user_digest WHERE user_id = $1`, [userId]);
+  return (r.rows && r.rows[0] && r.rows[0].digest_text) || null;
+}
+
+async function getRecentSummaries(userId, n = 12) {
+  const r = await query(
+    `SELECT summary FROM chat_session_summary
+      WHERE user_id = $1 AND summary IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [userId || null, Math.max(1, Math.min(20, n))]
+  );
+  return (r.rows || []).map(x => String(x.summary || ''));
+}
+
+async function readAgentNamePg({ userId }) {
+  const res = await query(
+    `SELECT preferred_agent_name FROM user_agent_settings WHERE user_id = $1`,
+    [userId]
+  );
+  return { name: (res.rows[0] && res.rows[0].preferred_agent_name) || null };
+}
+
+async function setAgentNamePg({ userId, name }) {
+  const normalized = String(name || '').trim();
+  if (!userId || !normalized) throw new Error('userId and name are required');
+  await query(
+    `INSERT INTO user_agent_settings (user_id, preferred_agent_name, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (user_id) DO UPDATE SET preferred_agent_name = EXCLUDED.preferred_agent_name, updated_at = now()`,
+    [userId, normalized]
+  );
+  return { ok: true };
+}
+
+async function readAgentSettingsPg({ userId }) {
+  const res = await query(
+    `SELECT preferred_agent_name, preferred_voice, preferred_style FROM user_agent_settings WHERE user_id = $1`,
+    [userId]
+  );
+  const row = res.rows && res.rows[0];
+  return {
+    name: row ? row.preferred_agent_name : null,
+    voice: row ? row.preferred_voice : null,
+    style: row ? row.preferred_style : null
+  };
+}
+
+async function setAgentSettingsPg({ userId, name, voice, style }) {
+  if (!userId) throw new Error('userId required');
+  const normName = name != null ? String(name).trim() : null;
+  const normVoice = voice != null ? String(voice).trim().toLowerCase() : null;
+  const normStyle = style != null ? String(style).trim() : null;
+  await query(
+    `INSERT INTO user_agent_settings (user_id, preferred_agent_name, preferred_voice, preferred_style, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (user_id) DO UPDATE SET
+       preferred_agent_name = COALESCE(EXCLUDED.preferred_agent_name, user_agent_settings.preferred_agent_name),
+       preferred_voice = COALESCE(EXCLUDED.preferred_voice, user_agent_settings.preferred_voice),
+       preferred_style = COALESCE(EXCLUDED.preferred_style, user_agent_settings.preferred_style),
+       updated_at = now()`,
+    [userId, normName, normVoice, normStyle]
+  );
+  return { ok: true };
+}

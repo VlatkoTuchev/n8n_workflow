@@ -1,3 +1,6 @@
+// ====================================================================================================
+// Section: Imports, environment, and shared clients
+// ====================================================================================================
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -6,16 +9,23 @@ const { query } = require('./db');
 const { redis, connectRedis, addChatTurn, getRecentChat, getFullChat, setSessionActivity } = require('./redis');
 const {
   createUser,
-  createKb,
-  kbAddText,
-  retrieveKb,
   createChatSession,
   addChatMessage,
   getRecentMessages,
   saveSessionSummary,
   readLatestSummary,
   readPreferredLanguagePg,
-  setPreferredLanguagePg
+  setPreferredLanguagePg,
+  readAgentNamePg,
+  setAgentNamePg,
+  readAgentSettingsPg,
+  setAgentSettingsPg,
+  ensureMemoryTables,
+  upsertUserMemoryItems,
+  selectTopKUserMemory,
+  setUserDigest,
+  getUserDigest,
+  getRecentSummaries
 } = require('./retrieval');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -24,31 +34,29 @@ const mysqlDb = require('./mysql');
 const OpenAI = require('openai');
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Append user/model turns to chat_session.conversation (JSON array) in realtime
-async function updateSessionConversation(sessionId, role, content) {
+// ----------------------------------------------------------------------------------------------------
+// Helper: Ensure a corresponding MySQL users row exists for the authenticated email
+// This keeps CDC mirrors (user_mysql_mirror) populated when app_user is created first.
+async function ensureMysqlUserForEmail(email, nameHint) {
   try {
-    if (!sessionId || !content) return;
-    const res = await query(`SELECT conversation FROM chat_session WHERE id = $1`, [sessionId]);
-    let convo = [];
-    try { convo = Array.isArray(res.rows?.[0]?.conversation) ? res.rows[0].conversation : JSON.parse(JSON.stringify(res.rows?.[0]?.conversation || [])); } catch (_) { convo = []; }
-    const nowIso = new Date().toISOString();
-    if (role === 'user') {
-      convo.push({ user: String(content), model: null, created: nowIso });
-    } else if (role === 'assistant') {
-      let updated = false;
-      for (let i = convo.length - 1; i >= 0; i--) {
-        if (convo[i] && (convo[i].model == null)) { convo[i].model = String(content); updated = true; break; }
-      }
-      if (!updated) { convo.push({ user: null, model: String(content), created: nowIso }); }
-    } else {
-      convo.push({ user: null, model: String(content), created: nowIso });
-    }
-    const maxPairs = Math.max(1, Number(process.env.CONVERSATION_MAX_PAIRS || 200));
-    if (convo.length > maxPairs) { convo = convo.slice(convo.length - maxPairs); }
-    await query(`UPDATE chat_session SET conversation = $2 WHERE id = $1`, [sessionId, JSON.stringify(convo)]);
-  } catch (_) { /* best-effort; do not block tool path */ }
+    if (!email) return;
+    const rows = await mysqlDb.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [email]);
+    if (rows && rows.length) return; // exists
+    // Create with a random strong password hash (not used for login if SSO); can be reset later
+    const randomPwd = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const hash = await bcrypt.hash(randomPwd, 10);
+    const name = nameHint || (email.includes('@') ? email.split('@')[0] : 'User');
+    await mysqlDb.query(
+      `INSERT INTO users (name,email,password,created_at,updated_at) VALUES (?,?,?,?,NOW())`,
+      [name, email, hash, new Date()]
+    );
+  } catch (_) {}
 }
 
+// ====================================================================================================
+// Section: Context composition (reads Postgres mirrors)
+// - Builds a compact, human-readable personalization context for instructions
+// ====================================================================================================
 // Compose a concise, human-readable context summary for the authenticated user
 async function composeUserContextSummary(email, pgUserId) {
   try {
@@ -160,11 +168,19 @@ async function composeUserContextSummary(email, pgUserId) {
   }
 }
 
+// ====================================================================================================
+// Section: Express app and middleware (CORS/JSON/cookies)
+// ====================================================================================================
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.text({ type: ['application/sdp', 'text/plain'] }));
 app.use(cookieParser());
+
+// Ensure lean memory tables exist at startup (no-op if present)
+(async () => {
+  try { await ensureMemoryTables(); } catch (e) { try { console.warn('ensureMemoryTables failed', e?.message || e); } catch (_) {} }
+})();
 
 function signToken(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -176,6 +192,10 @@ function authRequired(req, res, next) {
   catch { return res.status(401).json({ error: 'Invalid token' }); }
 }
 
+// ====================================================================================================
+// Section: Realtime WebRTC SDP exchange proxy
+// - Accepts SDP offer, proxies to OpenAI, returns SDP answer
+// ====================================================================================================
 // Realtime WebRTC SDP exchange proxy to OpenAI (place before static routing)
 // Accept SDP over POST; respond with OpenAI's SDP answer
 app.all('/realtime/sdp', authRequired, async (req, res) => {
@@ -195,10 +215,16 @@ app.all('/realtime/sdp', authRequired, async (req, res) => {
 
     const fetchImpl = global.fetch || (async (...args) => (await import('node-fetch')).default(...args));
 
+    // Prefer client-provided ephemeral token for Authorization (includes server-built instructions)
+    const clientEphemeral = (req.headers['x-openai-session-token'] || '').toString().trim();
+    if (!clientEphemeral) {
+      console.warn('[realtime/sdp] Missing X-OpenAI-Session-Token header; falling back to API key (no per-user instructions)');
+    }
+    const authKey = clientEphemeral || apiKey;
     const upstream = await fetchImpl(`https://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Bearer ${authKey}`,
         'Content-Type': 'application/sdp',
         'Accept': 'application/sdp',
         'OpenAI-Beta': 'realtime=v1'
@@ -213,6 +239,7 @@ app.all('/realtime/sdp', authRequired, async (req, res) => {
       return;
     }
     res.set('Content-Type', 'application/sdp');
+    res.set('X-Session-Token-Used', clientEphemeral ? 'true' : 'false');
     res.send(answerSdp);
   } catch (err) {
     console.error('Realtime SDP proxy error:', err);
@@ -220,6 +247,10 @@ app.all('/realtime/sdp', authRequired, async (req, res) => {
   }
 });
 
+// ====================================================================================================
+// Section: Realtime client token minting
+// - Injects Working Memory Pack + user context into instructions
+// ====================================================================================================
 // Mint a fresh ephemeral token using the permanent API key
 app.all('/realtime/token', authRequired, async (req, res) => {
   try {
@@ -229,44 +260,239 @@ app.all('/realtime/token', authRequired, async (req, res) => {
 
     const model = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
     const fetchImpl = global.fetch || (async (...args) => (await import('node-fetch')).default(...args));
+    // Ensure user exists in MySQL so CDC mirrors have the user row
+    try { await ensureMysqlUserForEmail(req.user?.email || null, null); } catch(_) {}
     // Build compact user context for instructions (no prior-session continuation)
     let contextSummary = '';
     try { contextSummary = await composeUserContextSummary(req.user?.email || null, req.user?.pgUserId || null); } catch (_) {}
-    const baseInstructions = `Role & mission: You are a warm, upbeat learning companion and coach for user ${req.user?.pgUserId || 'unknown'}. Help the learner feel they belong, build confidence, and make steady progress.
-Session start: Treat every new session as fresh. Do not continue a prior conversation. On the first response, greet the user by preferred name, acknowledge their context briefly, and ask exactly one open question. Do not say “welcome back” unless the user indicates a return.
-Tone & style: Warm, non-judgmental, concise for voice. Offer choices; ask permission before advice. Use process praise; normalize struggle.
-Conversation loop:
-  1) Connect: Ask one open question; reflect and affirm.
-  2) Plan: Offer 2–3 options; use Elicit–Provide–Elicit for tips.
-  3) Practice: Small retrieval/practice; increase difficulty gradually.
-  4) Feedback: Specific, process-focused; high standards + assurance.
-  5) Reflect: What worked, what was tricky, what next.
-  6) Next step: Propose a micro-goal and optional spaced review.
-Personalization: Use the context below; prefer the user's language when present; request personal details only when relevant and with permission.
-Question cadence: One open question per turn; keep turns 2–4 sentences; use examples; avoid jargon unless the learner prefers it.
-Safety: Avoid probing sensitive info; be culturally respectful.
-Do: invite choice, affirm effort, normalize struggle, summarize progress. Don't: lecture long or stack multiple questions.
-Exit: Summarize wins + next tiny action; confirm a follow-up.`;
-    const insParts = [baseInstructions];
+    // Preferred language guardrail (always respond in user's preferred language unless they confirm a change)
+    let preferredLanguage = null;
+    try {
+      if (req.user?.pgUserId) {
+        const langRow = await readPreferredLanguagePg({ userId: req.user.pgUserId });
+        preferredLanguage = langRow && langRow.language ? String(langRow.language) : null;
+      }
+    } catch (_) {}
+    // Read agent personalization (persisted per user)
+    let preferredVoice = 'alloy';
+    let agentName = null;
+    let agentStyle = null;
+    try {
+      if (req.user?.pgUserId) {
+        const settings = await readAgentSettingsPg({ userId: req.user.pgUserId });
+        const v = settings && settings.voice ? String(settings.voice).toLowerCase() : null;
+        if (v === 'alloy' || v === 'cedar') preferredVoice = v;
+        agentName = settings && settings.name ? String(settings.name) : null;
+        agentStyle = settings && settings.style ? String(settings.style) : null;
+      }
+    } catch (_) {}
+    // Compose Working Memory Pack from user_memory (if available)
+    let workingPack = '';
+    try {
+      const top = await selectTopKUserMemory(req.user?.pgUserId || null, null);
+      const lines = [];
+      function pushSection(title, rows) {
+        if (!rows || rows.length === 0) return;
+        lines.push(`${title}:`);
+        for (const r of rows) { lines.push(`- ${r.statement}`); }
+        lines.push('');
+      }
+      pushSection('Facts', top?.facts);
+      pushSection('Preferences', top?.preferences);
+      pushSection('Goals', top?.goals);
+      pushSection('Progress', top?.progress);
+      pushSection('Open Questions', top?.open_questions);
+      workingPack = lines.join('\n').trim();
+    } catch (_) {}
+    // Build last 5 summaries (newest first) to provide recency without digest
+    let recentSummariesBlock = '';
+    try {
+      const rs = await query(
+        `SELECT summary, created_at FROM chat_session_summary
+           WHERE user_id = $1 AND summary IS NOT NULL
+           ORDER BY created_at DESC
+           LIMIT 5`,
+        [req.user?.pgUserId || null]
+      );
+      if (rs && rs.rows && rs.rows.length) {
+        recentSummariesBlock = rs.rows.map((row, i) => {
+          const iso = row.created_at ? new Date(row.created_at).toISOString() : 'unknown-date';
+          return `S${i+1} [${iso}]: ${String(row.summary || '').trim()}`;
+        }).join('\n\n');
+      }
+    } catch (_) {}
+
+    // Build last 2 conversation excerpts (from chat_message JSON) for smooth continuation
+    let recentConvosBlock = '';
+    let lastConversationUpdatedAt = null;
+    // Try to fetch display name for meta-guidance
+    let userDisplayName = null;
+    try {
+      if (req.user?.email) {
+        const r = await query(`SELECT name FROM user_mysql_mirror WHERE email = $1 LIMIT 1`, [req.user.email]);
+        userDisplayName = (r && r.rows && r.rows[0] && r.rows[0].name) || null;
+      }
+      if (!userDisplayName && req.user?.email) {
+        userDisplayName = String(req.user.email).split('@')[0];
+      }
+    } catch (_) {}
+    try {
+      const rows = await query(
+        `SELECT content, updated_at
+           FROM chat_message
+          WHERE user_id = $1
+          ORDER BY updated_at DESC
+          LIMIT 2`,
+        [req.user?.pgUserId || null]
+      );
+      if (rows && rows.rows && rows.rows.length) {
+        const chunks = [];
+        for (let i = 0; i < rows.rows.length; i++) {
+          const r = rows.rows[i];
+          const updated = r.updated_at ? new Date(r.updated_at) : null;
+          if (i === 0) lastConversationUpdatedAt = updated;
+          let arr = [];
+          try { arr = Array.isArray(r.content) ? r.content : JSON.parse(r.content || '[]'); } catch (_) { arr = []; }
+          // Take the last 8 turns for brevity
+          const tail = Array.isArray(arr) ? arr.slice(-8) : [];
+          const lines = tail.map(m => {
+            const role = (m && m.role === 'model') ? 'Assistant' : 'User';
+            const text = (m && m.text != null) ? String(m.text) : String(m?.content || '');
+            return `${role}: ${text.trim()}`;
+          });
+          const iso = updated ? updated.toISOString() : 'unknown-date';
+          chunks.push(`Conversation [${iso}]\n${lines.join('\n')}`);
+        }
+        recentConvosBlock = chunks.join('\n\n');
+      }
+    } catch (_) {}
+    const baseInstructions = `Identity & personality: By default you are Nova, a friendly, upbeat learning companion with a touch of humor. If an "Agent name policy" is provided in these instructions, use that name instead of Nova. If an "Agent style preference" is provided, adopt that style while keeping responses clear and concise. You continue conversations smoothly, as if we just paused and resumed. You adapt to the learner’s level and mood, stay practical, and keep the pace comfortable.
+
+Environment: Voice‑first in the Compenion AI web app. Speak clearly. Keep turns short (2–4 sentences), natural, and easy to follow.
+
+Tone: Warm, human, a bit playful. Use brief affirmations ("Got it", "I see"). Small fillers are okay in moderation. Use short pauses with "..." to pace speech. Encourage, never lecture.
+
+Primary goal: Continue from where the learner left off using the provided memory (facts, preferences, goals, progress, open questions), recent summaries, and recent conversation excerpts. Then guide toward the next meaningful step.
+
+Assistance framework:
+1) Initial classification
+   - Infer intent (continue study, plan next step, troubleshoot blockers, explore resources)
+   - Sense proficiency from language and pace
+   - Check urgency; prioritize immediate needs first
+
+2) Information delivery
+   - For planning: propose 2–3 options; ask preference; provide the chosen path step‑by‑step with quick checkpoints
+   - For practice: design a tiny retrieval/practice task; increase difficulty gradually
+   - For blockers: diagnose common → rare causes; give one action at a time
+   - Adjust depth: beginner → analogies; advanced → precise terminology
+
+3) Validation
+   - Confirm understanding before moving on
+   - If not resolved, offer an alternative with clear trade‑offs
+   - Summarize progress in one line
+
+4) Connection & continuation
+   - Reference prior goals or progress when relevant
+   - Link to upcoming events or materials when helpful
+   - End with a clear next micro‑step and optional follow‑up
+
+Platform scope:
+   - Your recommendations MUST stay within this platform’s catalog and data.
+   - Do NOT mention or recommend external platforms (e.g., Coursera, Udemy, edX) unless the user explicitly asks. If asked, explain your scope is limited to this platform and offer in‑platform alternatives.
+
+Data sourcing rules:
+   - For course listings, dates, or recommendations, you MUST call the provided tools:
+     * list_courses to retrieve available courses and start times
+     * recommend_courses to suggest upcoming items within a date window
+   - Do NOT invent courses or dates. If tools return nothing, say you don’t have matching items.
+   - NEVER reveal database schemas, table names, or SQL details. Provide only user‑facing summaries.
+
+First turn policy:
+   - Assume continuity. Skim the recent conversation excerpts and newest summary to pick up exactly where we left off.
+   - If return is very recent (minutes), acknowledge timing playfully (e.g., “you’re back fast”). If long break, acknowledge gently.
+   - Greet naturally (use preferred name), then continue with one relevant detail and one inviting question or next step. Keep to 2 short sentences.
+
+Guardrails:
+   - Stay focused on the learner’s topics and progress; avoid speculation
+   - Be transparent if unsure and ask a clarifying question
+   - Never claim to read private data; use only provided memory/context
+   - Don’t restate the entire memory pack; weave it naturally
+   - Ask only one question at a time; avoid stacked questions
+   - Do NOT claim vision, camera access, or physical awareness. Never say you can see the user, their surroundings, or real‑time actions. You only perceive text and user audio transcripts.
+   - Do NOT imply monitoring or surveillance.
+   - Keep content appropriate for an educational assistant; avoid small talk that suggests physical presence.
+   - Do NOT say that you can see through the users camera feed also do NOT mention the camera at all and users background.
+  
+Tool use (if available):
+   - Use get_user_context for details on upcoming/attended/favorites/quizzes when needed
+   - Use set_preferred_language when the learner asks to change language
+   - For set_agent_settings (voice): You should ALWAYS use the voice that the user has set, not the default voice and also when switching you should say to the user to refresh the page so the changes apply to a new session.
+   - Prefer memory/digest first; use tools after the greeting and only between turns
+
+Safety & inclusion: Be culturally respectful; avoid probing sensitive info; normalize struggle; praise effort and strategy.`;
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+    let nowLocal = '';
+    try {
+      nowLocal = new Intl.DateTimeFormat('en-GB', {
+        timeZone: tz,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+      }).format(now);
+    } catch (_) { nowLocal = now.toLocaleString('en-GB'); }
+    const hasHistory = Boolean((recentSummariesBlock && recentSummariesBlock.length) || (recentConvosBlock && recentConvosBlock.length));
+    const continuityBlock = hasHistory
+      ? `Continuity:\n- You DO have prior context in this prompt.\n- Continue from the newest summary/excerpt.\n- Reference at most one prior detail.\n- Do NOT claim memory beyond what is shown here.`
+      : `Continuity:\n- This is the FIRST interaction; there is NO previous session.\n- Do NOT say we spoke before. Do NOT invent past details.\n- Start fresh with a concise, engaging opener and one question.`;
+
+    const insParts = [
+      baseInstructions,
+      continuityBlock,
+      (preferredLanguage ? `Language Policy:\n- RESPOND ONLY IN ${preferredLanguage}.\n- Do NOT switch languages unless the user explicitly asks to change language.\n- If the user asks to change, briefly confirm, call set_preferred_language, and continue in the new language immediately thereafter.\n- If incoming speech is in a different language, ask a one-line confirmation before switching.` : null),
+      `Current date/time (${tz}): ${nowLocal}`,
+      `Current date/time (UTC): ${nowIso}`
+    ];
+    if (agentName) insParts.push(`Agent name policy:\n- Your current name is "${agentName}".\n- When asked your name, answer using this name verbatim (e.g., "I'm ${agentName}", or "You can call me ${agentName}").\n- Override any earlier mentions or defaults (do NOT use "Nova" unless this policy sets it).\n- If the learner asks to change it, confirm and adapt.`);
+    if (agentStyle) insParts.push(`Agent style preference:\n- Maintain this baseline style across turns: ${agentStyle}.\n- Keep responses clear, concise, and on-task while reflecting the style.\n- If the learner asks to change it, confirm and adapt.`);
     if (contextSummary) insParts.push(`Context for personalization:\n${contextSummary}`);
-    let instructions = insParts.join('\n\n');
+    if (hasHistory && recentSummariesBlock) insParts.push(`Recent session summaries (NEWEST FIRST; prefer newest on conflict):\n${recentSummariesBlock}`);
+    if (hasHistory && workingPack) insParts.push(`Working Memory Pack (use naturally; do not restate verbatim):\n${workingPack}`);
+    if (hasHistory && recentConvosBlock) {
+      insParts.push(`Recent conversation excerpts (most recent first):\n${recentConvosBlock}`);
+      insParts.push(
+        `Guidance: These are the last conversations that you and ${userDisplayName || 'the user'} had in the previous session. Smoothly continue from there with variety and light humor. Do not restate the entire memory.`
+      );
+    } else {
+      insParts.push(
+        `Guidance: There is no prior conversation for this user. START FRESH.
+Welcome policy (FIRST CONTACT ONLY):
+- Sound genuinely excited and warm.
+- Introduce yourself with a friendly, memorable name (e.g., “Hi! I’m Nova—your learning companion”).
+- Explicitly offer to change your name if the user prefers (“If you want me to go by a different name, just tell me”).
+- In 1–2 short sentences, give an upbeat welcome and invite a first step or question.
+- Keep it natural—avoid stock phrases like “Hi there,” and vary the opening line.`
+      );
+    }
+    const instructionsFull = insParts.join('\n\n');
+    let instructions = instructionsFull;
     const MAX_INS = 4000; if (instructions.length > MAX_INS) instructions = instructions.slice(0, MAX_INS - 3) + '...';
 
-    // Optional debug log of what we inject (redacted/trimmed)
+    // Optional debug log of what we inject (full when debug is enabled)
     try {
       const envVal = String(process.env.DEBUG_CONTEXT_LOG || '').toLowerCase();
-      const dbgEnv = ['true','1','yes','on','full','all'].includes(envVal);
+      const dbgEnv = ['true','1','yes','on','full','all','raw'].includes(envVal);
       const dbgQueryStr = String(req.query?.debug || '').toLowerCase();
       const dbgQuery = ['true','1','yes','on','full','all','raw'].includes(dbgQueryStr);
-      const full = ['full','all','raw'].includes(envVal) || ['full','all','raw'].includes(dbgQueryStr);
+      // When any debug flag is present, always print FULL content
       if (dbgEnv || dbgQuery) {
-        const preview = (s, n=800) => (s ? String(s).slice(0, n) : '');
         console.log('================ [realtime.token context] ================');
         console.log('email:', req.user?.email || null);
         console.log('contextSummary.len:', (contextSummary || '').length);
-        console.log(full ? 'contextSummary.full:' : 'contextSummary.preview:', full ? (contextSummary || '') : preview(contextSummary));
-        console.log('instructions.len:', (instructions || '').length);
-        console.log(full ? 'instructions.full:' : 'instructions.preview:', full ? (instructions || '') : preview(instructions, 1200));
+        console.log('contextSummary.full:', contextSummary || '');
+        console.log('instructions.len:', (instructionsFull || '').length);
+        console.log('instructions.full:', instructionsFull || '');
         console.log('==========================================================');
       }
     } catch (_) {}
@@ -281,7 +507,7 @@ Exit: Summarize wins + next tiny action; confirm a follow-up.`;
       body: JSON.stringify({
         model,
         modalities: ['audio', 'text'],
-        voice: 'alloy',
+        voice: preferredVoice,
         // Provide soft context tying the realtime agent to the authenticated user
         instructions
       })
@@ -290,13 +516,17 @@ Exit: Summarize wins + next tiny action; confirm a follow-up.`;
     if (!upstream.ok) return res.status(upstream.status).json(data);
     const token = data?.client_secret?.value;
     if (!token) return res.status(500).json({ error: 'No client token in response' });
-    res.json({ token });
+    res.json({ token, hasHistory, preferredVoice });
   } catch (err) {
     console.error('Token endpoint error:', err);
     res.status(500).json({ error: 'Token endpoint error' });
   }
 });
 
+// ====================================================================================================
+// Section: Auth endpoints (register/login/logout)
+// - Bridges identities across Postgres app_user and MySQL users/registrants
+// ====================================================================================================
 // Register: creates MySQL registrant + user, and Postgres app_user (bridged)
 app.post('/auth/register', async (req, res) => {
   try {
@@ -392,6 +622,7 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
+// Logout and attempt background finalize of latest session
 app.post('/auth/logout', async (req, res) => {
   try {
     // Attempt to finalize the latest session for this user before logging out
@@ -426,6 +657,9 @@ app.post('/auth/logout', async (req, res) => {
   }
 });
 
+// ====================================================================================================
+// Section: Me and profile endpoints (MySQL + Postgres mirrors)
+// ====================================================================================================
 app.get('/me', authRequired, (req, res) => {
   res.json({ ok: true, ...req.user });
 });
@@ -453,40 +687,6 @@ app.get('/user/profile', authRequired, async (req, res) => {
   } catch (e) {
     console.error('profile error', e);
     res.status(500).json({ error: 'profile failed' });
-  }
-});
-
-// Enriched profile from Postgres mirror tables (via view or direct joins)
-app.get('/user/profile_enriched', authRequired, async (req, res) => {
-  try {
-    const email = req.user && req.user.email;
-    if (!email) return res.status(400).json({ error: 'No email on token' });
-    // Prefer a view if it exists; otherwise fall back to a safe join
-    let row = null;
-    try {
-      const r = await query(
-        `SELECT * FROM user_profile_enriched WHERE email = $1 LIMIT 1`,
-        [email]
-      );
-      row = (r && r.rows && r.rows[0]) || null;
-    } catch (_) {}
-    if (!row) {
-      const r2 = await query(
-        `SELECT u.id, u.name, u.email, u.updated_at,
-                ud.avatar, ud.onboarding_step
-           FROM user_mysql_mirror u
-      LEFT JOIN user_data_mysql_mirror ud ON ud.user_id = u.id
-          WHERE u.email = $1
-          LIMIT 1`,
-        [email]
-      );
-      row = (r2 && r2.rows && r2.rows[0]) || null;
-    }
-    if (!row) return res.status(404).json({ error: 'Profile not found' });
-    return res.json({ ok: true, profile: row });
-  } catch (e) {
-    console.error('profile_enriched error', e);
-    res.status(500).json({ error: 'profile_enriched failed' });
   }
 });
 
@@ -618,6 +818,9 @@ app.get('/user/context', authRequired, async (req, res) => {
   }
 });
 
+// ====================================================================================================
+// Section: Health
+// ====================================================================================================
 // Health check for Postgres and Redis
 app.get('/health', async (_req, res) => {
   try {
@@ -631,49 +834,103 @@ app.get('/health', async (_req, res) => {
   }
 });
 
+// ====================================================================================================
+// Section: Tool execution endpoint (user memory + KB + preferences)
+// ====================================================================================================
 // Tool execution endpoint (user memory + KB + preferences)
 app.post('/tools/execute', authRequired, async (req, res) => {
   try {
     const { name, arguments: args } = req.body || {};
     const toolName = String(name || '').trim();
     if (!toolName) return res.status(400).json({ error: 'Missing tool name' });
+    if (toolName === 'fetch_chat_history') {
+      const { range, from, to, sessions } = args || {};
+      const userId = (req.user && req.user.pgUserId) || null;
+      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+      // Mode 1: last N conversations (sessions param)
+      if (Number(sessions) && Number(sessions) > 0) {
+        const n = Math.min(10, Math.max(1, Number(sessions)));
+        const rs = await query(
+          `SELECT session_id, content, updated_at
+             FROM chat_message
+            WHERE user_id = $1
+            ORDER BY updated_at DESC
+            LIMIT $2`,
+          [userId, n]
+        );
+        const out = (rs.rows || []).map(r => ({
+          session_id: r.session_id,
+          updated_at: r.updated_at,
+          content: r.content
+        }));
+        return res.json({ ok: true, sessions: out });
+      }
+      // Mode 2: date range (default last_week)
+      const now = new Date();
+      let start = null, end = null;
+      try {
+        if (String(range || '').toLowerCase() === 'yesterday') {
+          end = new Date();
+          start = new Date(now.getTime() - 24*3600*1000);
+        } else if (String(range || '').toLowerCase() === 'last_week') {
+          end = new Date();
+          start = new Date(now.getTime() - 7*24*3600*1000);
+        } else if (String(range || '').toLowerCase() === 'custom') {
+          start = from ? new Date(from) : null;
+          end = to ? new Date(to) : null;
+        }
+      } catch (_) {}
+      if (!start) start = new Date(now.getTime() - 7*24*3600*1000);
+      if (!end) end = now;
+      const rows = await query(
+        `SELECT session_id, user_id, role, content, created_at
+           FROM chat_message
+          WHERE user_id = $1 AND created_at BETWEEN $2 AND $3
+          ORDER BY created_at ASC`,
+        [userId, start.toISOString(), end.toISOString()]
+      );
+      return res.json({ ok: true, items: rows.rows || [], from: start.toISOString(), to: end.toISOString() });
+    }
     const authedUserId = (req.user && req.user.pgUserId) || null;
     
     // Lightweight observability to troubleshoot client → server tool calls
     try { console.log('[tools/execute]', toolName, Object.keys(args || {})); } catch (_) {}
 
-    // Users
-    if (toolName === 'create_user') {
-      // Identity is provisioned at register/login; just return the authenticated id
-      if (!authedUserId) return res.status(401).json({ error: 'Unauthorized' });
-      return res.json({ ok: true, id: authedUserId });
-    }
+    // // Users
+    // if (toolName === 'create_user') {
+    //   // Identity is provisioned at register/login; just return the authenticated id
+    //   if (!authedUserId) return res.status(401).json({ error: 'Unauthorized' });
+    //   // Also ensure a MySQL users row exists for CDC mirroring
+    //   try { await ensureMysqlUserForEmail((req.user && req.user.email) || null, null); } catch(_) {}
+    //   return res.json({ ok: true, id: authedUserId });
+    // }
 
-    // Knowledge base
-    if (toolName === 'create_kb') {
-      const { ownerUserId, name: kbName, visibility } = args || {};
-      if (!kbName) return res.status(400).json({ error: 'name is required' });
-      const out = await createKb({ ownerUserId, name: kbName, visibility });
-      return res.json({ ok: true, id: out.id });
-    }
+    // // Knowledge base
+    // if (toolName === 'create_kb') {
+    //   const { ownerUserId, name: kbName, visibility } = args || {};
+    //   if (!kbName) return res.status(400).json({ error: 'name is required' });
+    //   const out = await createKb({ ownerUserId, name: kbName, visibility });
+    //   return res.json({ ok: true, id: out.id });
+    // }
 
-    if (toolName === 'kb_add_text') {
-      const { kbId, title, text, mimeType, metadata } = args || {};
-      if (!kbId || !text) return res.status(400).json({ error: 'kbId and text are required' });
-      const out = await kbAddText({ kbId, title, text, mimeType, metadata });
-      return res.json({ ok: true, ...out });
-    }
+    // if (toolName === 'kb_add_text') {
+    //   const { kbId, title, text, mimeType, metadata } = args || {};
+    //   if (!kbId || !text) return res.status(400).json({ error: 'kbId and text are required' });
+    //   const out = await kbAddText({ kbId, title, text, mimeType, metadata });
+    //   return res.json({ ok: true, ...out });
+    // }
 
-    if (toolName === 'retrieve_kb') {
-      const { kbId, queryText, topK } = args || {};
-      if (!kbId || !queryText) return res.status(400).json({ error: 'kbId and queryText are required' });
-      const rows = await retrieveKb({ kbId, queryText, topK });
-      return res.json({ ok: true, results: rows });
-    }
+    // if (toolName === 'retrieve_kb') {
+    //   const { kbId, queryText, topK } = args || {};
+    //   if (!kbId || !queryText) return res.status(400).json({ error: 'kbId and queryText are required' });
+    //   const rows = await retrieveKb({ kbId, queryText, topK });
+    //   return res.json({ ok: true, results: rows });
+    // }
 
     if (toolName === 'create_chat_session') {
-      const { userId, title } = args || {};
-      const out = await createChatSession({ userId, title });
+      const title = (args && args.title) ? args.title : 'WebRTC Session';
+      if (!authedUserId) return res.status(401).json({ error: 'Unauthorized' });
+      const out = await createChatSession({ userId: authedUserId, title });
       return res.json({ ok: true, id: out.id });
     }
 
@@ -682,18 +939,14 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       if (!sessionId || !role || !content) return res.status(400).json({ error: 'sessionId, role, content required' });
       await addChatTurn(sessionId, role, content);
       try {
-        let effUserId = authedUserId || null;
-        if (!effUserId) {
-          try {
-            const r = await query(`SELECT user_id FROM chat_session WHERE id = $1`, [sessionId]);
-            if (r.rows && r.rows[0] && r.rows[0].user_id) effUserId = r.rows[0].user_id;
-          } catch (_) {}
-        }
-        await addChatMessage({ sessionId, userId: effUserId, role, content });
+        const owner = authedUserId || (await (async () => {
+          try { const r = await query(`SELECT user_id FROM chat_session WHERE id = $1`, [sessionId]); return (r.rows && r.rows[0] && r.rows[0].user_id) || null; } catch (_) { return null; }
+        })());
+        await addChatMessage({ sessionId, userId: owner, role, content });
       } catch (e) {
         try { console.error('[add_chat_message error]', e && e.message ? e.message : e); } catch (_) {}
       }
-      try { await updateSessionConversation(sessionId, String(role || '').toLowerCase(), content); } catch (_) {}
+      // Conversation persistence handled by addChatTurn (Redis) and addChatMessage (Postgres)
       return res.json({ ok: true });
     }
 
@@ -707,7 +960,7 @@ app.post('/tools/execute', authRequired, async (req, res) => {
     }
 
     if (toolName === 'save_session_summary') {
-      const { sessionId, summary, nextPrompt, use_model, auto, from_messages } = args || {};
+      const { sessionId, summary, use_model, auto, from_messages } = args || {};
       if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
       // If explicitly requested (or summary omitted), summarize from chat_message via model
       if (use_model === true || auto === true || from_messages === true || !summary) {
@@ -747,6 +1000,150 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       return res.json({ ok: true });
     }
 
+    if (toolName === 'read_agent_name') {
+      if (!authedUserId) return res.status(400).json({ error: 'userId is required' });
+      const out = await readAgentNamePg({ userId: authedUserId });
+      return res.json({ ok: true, name: out.name });
+    }
+
+    if (toolName === 'set_agent_name') {
+      const { name } = args || {};
+      if (!authedUserId || !name) return res.status(400).json({ error: 'userId and name are required' });
+      await setAgentNamePg({ userId: authedUserId, name });
+      return res.json({ ok: true });
+    }
+
+    if (toolName === 'read_agent_settings') {
+      const { userId } = args || {};
+      const targetUserId = userId || authedUserId;
+      if (!authedUserId) return res.status(400).json({ error: 'auth required' });
+      if (!targetUserId) return res.status(400).json({ error: 'userId is required' });
+      // Enforce: caller can only read their own settings
+      if (String(targetUserId) !== String(authedUserId)) return res.status(403).json({ error: 'forbidden' });
+      const out = await readAgentSettingsPg({ userId: targetUserId });
+      return res.json({ ok: true, ...out });
+    }
+
+    if (toolName === 'set_agent_settings') {
+      const { userId: userIdArg, name, voice, style } = args || {};
+      const targetUserId = userIdArg || authedUserId;
+      if (!authedUserId) return res.status(400).json({ error: 'auth required' });
+      if (!targetUserId) return res.status(400).json({ error: 'userId is required' });
+      // Enforce: can only set own settings
+      if (String(targetUserId) !== String(authedUserId)) return res.status(403).json({ error: 'forbidden' });
+      await setAgentSettingsPg({ userId: targetUserId, name, voice, style });
+      return res.json({ ok: true });
+    }
+
+    if (toolName === 'list_courses') {
+      try {
+        // Discover available columns to robustly build results
+        const colsRes = await query(
+          `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'events_mysql_mirror'`
+        );
+        const cols = new Set((colsRes.rows || []).map(r => r.column_name));
+        if (cols.size === 0) return res.status(404).json({ ok: false, error: 'events_mysql_mirror not found' });
+
+        const selectCols = ['id'];
+        const titleCol = cols.has('title') ? 'title' : (cols.has('name') ? 'name' : null);
+        if (titleCol) selectCols.push(titleCol);
+        const maybeCols = ['start_at','starts_at','start_datetime','event_start','datetime','scheduled_at','event_date','start_date','date','start_time','time'];
+        const present = maybeCols.filter(c => cols.has(c));
+        selectCols.push(...present);
+        const sql = `SELECT ${selectCols.join(', ')} FROM events_mysql_mirror`;
+        const ev = await query(sql);
+        const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+        const now = new Date();
+        const items = (ev.rows || []).map(row => {
+          const title = titleCol ? row[titleCol] : (row.title || row.name || `Course ${row.id || ''}`);
+          // Derive a start Date
+          let start = null;
+          const val = (k) => (k && row[k] != null ? String(row[k]) : null);
+          const datePart = val('event_date') || val('start_date') || val('date');
+          const timePart = val('start_time') || val('time');
+          const directTs = val('start_at') || val('starts_at') || val('start_datetime') || val('event_start') || val('datetime') || val('scheduled_at');
+          if (directTs) {
+            const d = new Date(directTs);
+            if (!isNaN(d)) start = d;
+          } else if (datePart && timePart) {
+            const d = new Date(`${datePart} ${timePart}`);
+            if (!isNaN(d)) start = d;
+          } else if (datePart) {
+            const d = new Date(`${datePart}T00:00:00`);
+            if (!isNaN(d)) start = d;
+          }
+          const status = start ? (start.getTime() > now.getTime() ? 'upcoming' : (start.toDateString() === now.toDateString() ? 'today' : 'past')) : 'unknown';
+          let start_local = null;
+          try {
+            if (start) start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start);
+          } catch (_) {}
+          return { id: row.id || null, title, start_iso: start ? start.toISOString() : null, start_local, status };
+        });
+        // Sort upcoming first by time asc, then today, then past by time desc
+        items.sort((a,b) => {
+          const rank = (s) => s === 'upcoming' ? 0 : (s === 'today' ? 1 : (s === 'past' ? 2 : 3));
+          const ra = rank(a.status), rb = rank(b.status);
+          if (ra !== rb) return ra - rb;
+          const ta = a.start_iso ? Date.parse(a.start_iso) : 0;
+          const tb = b.start_iso ? Date.parse(b.start_iso) : 0;
+          return ra === 2 ? tb - ta : ta - tb; // past: latest first; others: earliest first
+        });
+        const out = { ok: true, counts: { total: items.length, upcoming: items.filter(i=>i.status==='upcoming').length, past: items.filter(i=>i.status==='past').length }, items };
+        return res.json(out);
+      } catch (e) {
+        console.error('list_courses error', e);
+        return res.status(500).json({ ok: false, error: 'list_courses_failed' });
+      }
+    }
+
+    if (toolName === 'recommend_courses') {
+      try {
+        const { limit, days_ahead } = args || {};
+        const lim = Math.min(10, Math.max(1, Number(limit) || 3));
+        const ahead = Math.min(180, Math.max(1, Number(days_ahead) || 60));
+        // Use list_courses result and filter upcoming within N days
+        req.body = { name: 'list_courses', arguments: {} };
+        const listRes = await (async () => {
+          // Quick internal call
+          const colsRes = await query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='events_mysql_mirror'`);
+          if ((colsRes.rows || []).length === 0) return { ok: true, items: [] };
+          const cols = new Set(colsRes.rows.map(r=>r.column_name));
+          const selectCols = ['id'];
+          const titleCol = cols.has('title') ? 'title' : (cols.has('name') ? 'name' : null);
+          if (titleCol) selectCols.push(titleCol);
+          const maybeCols = ['start_at','starts_at','start_datetime','event_start','datetime','scheduled_at','event_date','start_date','date','start_time','time'];
+          const present = maybeCols.filter(c => cols.has(c));
+          selectCols.push(...present);
+          const sql = `SELECT ${selectCols.join(', ')} FROM events_mysql_mirror`;
+          const ev = await query(sql);
+          const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+          const now = new Date();
+          const items = (ev.rows || []).map(row => {
+            const title = titleCol ? row[titleCol] : (row.title || row.name || `Course ${row.id || ''}`);
+            let start = null;
+            const val = (k) => (k && row[k] != null ? String(row[k]) : null);
+            const datePart = val('event_date') || val('start_date') || val('date');
+            const timePart = val('start_time') || val('time');
+            const directTs = val('start_at') || val('starts_at') || val('start_datetime') || val('event_start') || val('datetime') || val('scheduled_at');
+            if (directTs) { const d = new Date(directTs); if (!isNaN(d)) start = d; }
+            else if (datePart && timePart) { const d = new Date(`${datePart} ${timePart}`); if (!isNaN(d)) start = d; }
+            else if (datePart) { const d = new Date(`${datePart}T00:00:00`); if (!isNaN(d)) start = d; }
+            let start_local = null;
+            try { if (start) start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start); } catch(_) {}
+            return { id: row.id || null, title, start };
+          });
+          return { ok: true, items };
+        })();
+        const now = new Date();
+        const futureLimit = new Date(now.getTime() + ahead*24*3600*1000);
+        const upcoming = (listRes.items || []).filter(x => x.start && x.start > now && x.start <= futureLimit).sort((a,b)=>a.start-b.start).slice(0, lim).map(x => ({ id: x.id, title: x.title, start_iso: x.start.toISOString() }));
+        return res.json({ ok: true, recommended: upcoming, window_days: ahead });
+      } catch (e) {
+        console.error('recommend_courses error', e);
+        return res.status(500).json({ ok: false, error: 'recommend_courses_failed' });
+      }
+    }
+
     if (toolName === 'get_user_profile') {
       // Fetch the authenticated user's profile from MySQL (name, email, plus basic extras)
       const email = (req.user && req.user.email) || null;
@@ -768,30 +1165,6 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       return res.json({ ok: true, profile: { id: u.id, name: u.name, email: u.email, created_at: u.created_at, updated_at: u.updated_at, ...(extras || {}) } });
     }
 
-    if (toolName === 'get_user_profile_enriched') {
-      const email = (req.user && req.user.email) || null;
-      if (!email) return res.status(400).json({ error: 'No email on token' });
-      let row = null;
-      try {
-        const r = await query(`SELECT * FROM user_profile_enriched WHERE email = $1 LIMIT 1`, [email]);
-        row = (r && r.rows && r.rows[0]) || null;
-      } catch (_) {}
-      if (!row) {
-        const r2 = await query(
-          `SELECT u.id, u.name, u.email, u.updated_at,
-                  ud.avatar, ud.onboarding_step
-             FROM user_mysql_mirror u
-        LEFT JOIN user_data_mysql_mirror ud ON ud.user_id = u.id
-            WHERE u.email = $1
-            LIMIT 1`,
-          [email]
-        );
-        row = (r2 && r2.rows && r2.rows[0]) || null;
-      }
-      if (!row) return res.status(404).json({ error: 'Profile not found' });
-      return res.json({ ok: true, profile: row });
-    }
-
     return res.status(404).json({ error: 'Unknown tool', name: toolName });
   } catch (e) {
     console.error('Tool execute error:', e);
@@ -799,6 +1172,9 @@ app.post('/tools/execute', authRequired, async (req, res) => {
   }
 });
 
+// ====================================================================================================
+// Section: Admin utilities (protected)
+// ====================================================================================================
 // Admin: delete memories for a user (or truncate all). Protected by ADMIN_TOKEN.
 app.post('/tools/admin/delete_memories', async (req, res) => {
   try {
@@ -821,6 +1197,9 @@ app.post('/tools/admin/delete_memories', async (req, res) => {
   }
 });
 
+// ====================================================================================================
+// Section: Static assets and HTML routes
+// ====================================================================================================
 // Serve node_modules for browser ESM imports (read-only)
 app.use('/node_modules', express.static(path.join(__dirname, 'node_modules')));
 
@@ -847,13 +1226,17 @@ app.get('/', (req, res) => {
   }
 });
 
+// Lightweight demo webhook
 app.post('/webhook', (req, res) => {
   const message = (req.body && req.body.message) || '';
   const reply = message ? `You said: ${message}` : 'Hello! I am listening.';
   res.json({ response: reply });
 });
 
-// ---- Session activity and finalization ----
+// ====================================================================================================
+// Section: Summarization pipeline (finalization)
+// - Builds cumulative summary, extracts atomic items, rebuilds digest
+// ====================================================================================================
 async function summarizeAndSaveSession(sessionId, userId) {
   console.log('[summary] summarizeAndSaveSession:start', { sessionId, userId });
   // 1) Prefer aggregated JSON from chat_message for this session
@@ -920,8 +1303,8 @@ async function summarizeAndSaveSession(sessionId, userId) {
       }).join('\n\n');
     }
   } catch (_) {}
-  const sys = 'You create concise cumulative user memories (8–12 sentences). Input includes prior dated summaries (most recent first) and the current transcript. Task: merge into ONE durable memory that captures stable facts, preferences, goals, progress, and open questions. Prefer the newest information when conflicts arise. Avoid chit‑chat, instructions, and duplication. Do not greet, do not ask questions, and do not include a "Next:" line. This output is an internal memory note for the assistant to consult later; it is not an assistant reply.';
-  const prompt = `${userId ? `User ID: ${userId}.` : ''}\n\nPrior dated summaries (most recent first; up to 15):\n${priorSummaries || '(none)'}\n\nCurrent conversation transcript:\n${transcript}\n\nWrite one cumulative memory now:`;
+  const sys = 'You write an internal cumulative memory note for the assistant (not a reply to the user). Merge prior dated summaries (most recent first) with the current transcript into ONE coherent memory capturing ONLY durable items: facts, preferences, goals, progress, and open questions.\n\nRules:\n- Length: 150–300 words (~900–1,400 characters).\n- No greetings, no questions, do not address the user, no instructions.\n- Prefer newest information when conflicts arise; drop the older.\n- Drop items older than ~90 days unless reaffirmed today or in the last 30 days.\n- De-duplicate paraphrases; keep the clearest single form.\n- Ignore chit‑chat, filler, and tool/procedure meta.';
+  const prompt = `${userId ? `User ID: ${userId}.` : ''}\n\nPrior dated summaries (most recent first; up to 15):\n${priorSummaries || '(none)'}\n\nCurrent conversation transcript:\n${transcript}\n\nWrite one cumulative memory now. Plain text only.`;
   const model = process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o';
   const completion = await openai.chat.completions.create({
     model,
@@ -934,14 +1317,49 @@ async function summarizeAndSaveSession(sessionId, userId) {
   });
   const summaryText = (completion.choices?.[0]?.message?.content || '').trim();
   if (!summaryText) return { saved: false, reason: 'summary_failed' };
-  const nextPrompt = null; // Explicitly disable "Next:" handling per new spec
   console.log('[summary] model_returned', { len: summaryText.length });
 
   // 4) Persist via UPSERT and return stored row
   const saved = await saveSessionSummary({ sessionId, userId, summary: summaryText });
   console.log('[summary] saved_row', { id: saved.id, sessionId: saved.session_id, userId: saved.user_id, updated_at: saved.updated_at });
+
+  // 5) Extract atomic memory items via model and upsert; rebuild short digest
+  try {
+    const extractSys = 'Extract atomic user memory items as strict JSON. Keep only stable facts, preferences, goals, progress, and open questions. Max 25 items total. No chit-chat. Schema: { items: [ { type:"fact|preference|goal|progress|open_question", statement:string, stability?:"short|med|long", pinned?:boolean } ] }.';
+    const extractPrompt = `Input cumulative summary (may include prior info):\n${summaryText}\n\nReturn ONLY JSON with the schema.`;
+    const extract = await openai.chat.completions.create({
+      model: process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o',
+      messages: [
+        { role: 'system', content: extractSys },
+        { role: 'user', content: extractPrompt }
+      ],
+      temperature: 0,
+      max_tokens: 400
+    });
+    let items = [];
+    try { items = JSON.parse(extract.choices?.[0]?.message?.content || '{}')?.items || []; } catch (_) { items = []; }
+    if (Array.isArray(items) && items.length) {
+      await upsertUserMemoryItems(userId, items);
+    }
+  } catch (e) { try { console.warn('memory extract failed', e?.message || e); } catch (_) {} }
+
+  try {
+    const recents = await getRecentSummaries(userId, 12);
+    const digestSys = 'Produce a 150–300 token rolling digest of the user\'s recent sessions. Emphasize changes and new developments. Keep only durable facts, active preferences, goals, current progress, and open questions. Prefer newest when conflicts occur. No greetings or questions.';
+    const digestPrompt = recents && recents.length ? recents.map((t,i)=>`S${i+1}: ${t}`).join('\n\n') : '(none)';
+    const dig = await openai.chat.completions.create({
+      model: process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o',
+      messages: [ { role: 'system', content: digestSys }, { role: 'user', content: digestPrompt } ],
+      temperature: 0.2,
+      max_tokens: 320
+    });
+    const digestText = (dig.choices?.[0]?.message?.content || '').trim();
+    if (digestText) await setUserDigest(userId, digestText);
+  } catch (e) { try { console.warn('digest build failed', e?.message || e); } catch (_) {} }
+
   return { saved: true, id: saved.id, summary: saved.summary };
 }
+// Keep-alive during active sessions (used by idle summarizer)
 app.post('/sessions/heartbeat', authRequired, async (req, res) => {
   try {
     const { sessionId } = req.body || {};
@@ -954,6 +1372,7 @@ app.post('/sessions/heartbeat', authRequired, async (req, res) => {
   }
 });
 
+// Explicit session finalization (foreground or queued background)
 app.post('/sessions/finalize', authRequired, async (req, res) => {
   try {
     let { sessionId, background } = req.body || {};
@@ -989,6 +1408,10 @@ app.post('/sessions/finalize', authRequired, async (req, res) => {
   }
 });
 
+// ====================================================================================================
+// Section: Idle summarizer
+// - Finalizes sessions after inactivity with backoff on failure
+// ====================================================================================================
 // Idle summarizer (enabled by default; set ENABLE_IDLE_SUMMARIZER=false to disable)
 if (String(process.env.ENABLE_IDLE_SUMMARIZER || 'true').toLowerCase() !== 'false') {
   // 60s default idle window
@@ -1013,9 +1436,23 @@ if (String(process.env.ENABLE_IDLE_SUMMARIZER || 'true').toLowerCase() !== 'fals
           let userId = null;
           try { userId = await redis.get(`chat:session_user:${sessionId}`); } catch (_) {}
           console.log('[summary] idle_finalizer running', { sessionId, userId });
-          await summarizeAndSaveSession(sessionId, userId);
-          // Mark as processed to avoid repeats soon
+          const result = await summarizeAndSaveSession(sessionId, userId);
+          // Delete the idle key only on successful save; otherwise back off after a few failures
+          if (result && result.saved) {
           await redis.del(key);
+          } else {
+            try {
+              const failKey = `chat:last_activity_fail:${sessionId}`;
+              const nStr = await redis.incr(failKey);
+              const n = Number(nStr || 0);
+              await redis.expire(failKey, 3600); // 1h window
+              if (n >= 3) {
+                // Give up for now to prevent hot loops; clear markers
+                await redis.del(key);
+                await redis.del(failKey);
+              }
+            } catch (_) {}
+          }
         } catch (_) {}
       }
     } catch (e) {
@@ -1024,5 +1461,8 @@ if (String(process.env.ENABLE_IDLE_SUMMARIZER || 'true').toLowerCase() !== 'fals
   }, Math.max(15_000, Number(process.env.IDLE_SUMMARIZER_INTERVAL_MS || 30_000)));
 }
 
+// ====================================================================================================
+// Section: Startup
+// ====================================================================================================
 const PORT = process.env.PORT || 4400;
 app.listen(PORT, () => console.log(`Static server running at http://localhost:${PORT}`));
