@@ -1876,7 +1876,7 @@
                         }));
                     } else {
                         // Returning user: strictly continue from the most recent excerpt; no generic re-introductions
-                        if (anchor && anchor.text) {
+                        if (false && anchor && anchor.text) {
                             parts.push('CONTINUATION INTRO: Begin with a brief, natural greeting (use the name if provided). In 2–3 short sentences: (1) optionally acknowledge timing (e.g., “you’re back fast”), and (2) continue directly from the user’s last message by referencing exactly ONE concrete detail. Do NOT invent topics, and do NOT mention personal routines/fitness unless present in the excerpt. Ask ONE focused question to move forward.');
                             const tag = anchor.whenLocal ? ` [${anchor.whenLocal}]` : '';
                             parts.push(`Continuation anchor (MANDATORY): Last user message${tag}: "${anchor.text}". Your first line MUST respond to THIS content; ignore any conflicting memory. Keep it concise.`);
