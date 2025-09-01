@@ -971,7 +971,10 @@
                     while (Date.now() < deadline) {
                         try {
                         const me = await fetch('/me').then(r => r.json());
-                        if (me && me.pgUserId) return me.pgUserId;
+                        if (me && me.pgUserId) {
+                            try { window.__CA_UID = String(me.pgUserId); } catch(_) {}
+                            return me.pgUserId;
+                        }
                         } catch (_) {}
                         await new Promise(r => setTimeout(r, 150));
                     }
@@ -1212,7 +1215,7 @@
                         btn.textContent = '</>';
                         btn.addEventListener('click', () => {
                             try {
-                                const raw = sessionStorage.getItem('code_assist_blocks') || sessionStorage.getItem('code_assist_last');
+                                const raw = sessionStorage.getItem(caKey('code_assist_blocks')) || sessionStorage.getItem(caKey('code_assist_last'));
                                 if (!raw) return; const payload = JSON.parse(raw);
                                 openOrRenderCodeAssist(Array.isArray(payload) ? payload : [payload]);
                             } catch (_) {}
@@ -1310,8 +1313,10 @@
                     try { body.scrollTop = body.scrollHeight; } catch(_) {}
                 }
 
-                // On load: if we have a saved panel, show the launcher for reopening
-                try { if (sessionStorage.getItem('code_assist_blocks') || sessionStorage.getItem('code_assist_last')) ensureCodeAssistLauncher().style.display='grid'; } catch(_) {}
+                // Storage helpers to namespace code-assist data per user
+                function caKey(base){ const uid = (typeof window.__CA_UID === 'string' && window.__CA_UID) ? window.__CA_UID : 'anon'; return `${base}:${uid}`; }
+                // On load: after user id is available, show launcher if this user has saved content
+                (async () => { try { const uid = await getUserId(); if (sessionStorage.getItem(caKey('code_assist_blocks')) || sessionStorage.getItem(caKey('code_assist_last'))) ensureCodeAssistLauncher().style.display='grid'; } catch(_) {} })();
 
                 const toolHandler = async (evt) => {
                     try {
@@ -1516,10 +1521,10 @@
                                 // Append a new block and render all sections from session state
                                 try {
                                     const newBlock = { language, title, problem, code, explanation, next_actions: nextActions };
-                                    const arr = JSON.parse(sessionStorage.getItem('code_assist_blocks') || '[]');
+                            const arr = JSON.parse(sessionStorage.getItem(caKey('code_assist_blocks')) || '[]');
                                     arr.push(newBlock);
-                                    sessionStorage.setItem('code_assist_blocks', JSON.stringify(arr));
-                                    sessionStorage.setItem('code_assist_last', JSON.stringify(newBlock));
+                            sessionStorage.setItem(caKey('code_assist_blocks'), JSON.stringify(arr));
+                            sessionStorage.setItem(caKey('code_assist_last'), JSON.stringify(newBlock));
                                     openOrRenderCodeAssist(arr);
                                 } catch(_) {}
 
@@ -1550,7 +1555,7 @@
                                 } catch (_) { args = {}; }
                                 try {
                                     // Merge with existing blocks; default to last block unless block_index provided
-                                    const arr = JSON.parse(sessionStorage.getItem('code_assist_blocks') || '[]');
+                            const arr = JSON.parse(sessionStorage.getItem(caKey('code_assist_blocks')) || '[]');
                                     const idx = (typeof args.block_index === 'number' && args.block_index >= 0 && args.block_index < arr.length) ? args.block_index : (arr.length - 1);
                                     const prev = arr[idx] || {};
                                     const updated = Object.assign({}, prev);
@@ -1567,8 +1572,8 @@
                                         updated.next_actions = base;
                                     }
                                     if (idx >= 0) { arr[idx] = updated; } else { arr.push(updated); }
-                                    sessionStorage.setItem('code_assist_blocks', JSON.stringify(arr));
-                                    sessionStorage.setItem('code_assist_last', JSON.stringify(updated));
+                            sessionStorage.setItem(caKey('code_assist_blocks'), JSON.stringify(arr));
+                            sessionStorage.setItem(caKey('code_assist_last'), JSON.stringify(updated));
                                     openOrRenderCodeAssist(arr);
                                     // Send a small echo back and log a short assistant turn
                                     const summary = String(args.summary || 'Updated code assist panel');
@@ -1934,7 +1939,13 @@
                         await summarizeAndSave();
                     } catch (_) {}
                     try { await fetch('/auth/logout', { method: 'POST' }); } catch (_) {}
-                    try { sessionStorage.removeItem('chat_session_id'); } catch (_) {}
+                    try {
+                        sessionStorage.removeItem('chat_session_id');
+                        const uidNow = await (typeof getUserId === 'function' ? getUserId() : Promise.resolve(null));
+                        const suffix = uidNow ? `:${uidNow}` : '';
+                        sessionStorage.removeItem('code_assist_blocks' + suffix);
+                        sessionStorage.removeItem('code_assist_last' + suffix);
+                    } catch (_) {}
                     location.href = '/login';
                 });
             }

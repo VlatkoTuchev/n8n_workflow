@@ -640,23 +640,45 @@ Welcome policy (FIRST CONTACT ONLY):
       }
     } catch (_) {}
 
-    const upstream = await fetchImpl('https://api.openai.com/v1/realtime/sessions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'OpenAI-Beta': 'realtime=v1'
-      },
-      body: JSON.stringify({
-        model,
-        modalities: ['audio', 'text'],
-        voice: preferredVoice,
-        // Provide soft context tying the realtime agent to the authenticated user
-        instructions
-      })
+    async function postSessionWithRetry(payload, attempts = 2) {
+      let lastErr = null;
+      const timeoutMs = Math.max(3000, Number(process.env.REALTIME_TOKEN_TIMEOUT_MS || 10000));
+      for (let i = 1; i <= attempts; i++) {
+        const controller = new AbortController();
+        const t = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const resp = await fetchImpl('https://api.openai.com/v1/realtime/sessions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+              'OpenAI-Beta': 'realtime=v1'
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+          });
+          clearTimeout(t);
+          return resp;
+        } catch (e) {
+          clearTimeout(t);
+          lastErr = e;
+          if (i < attempts) { await new Promise(r => setTimeout(r, 600 * i)); continue; }
+          throw e;
+        }
+      }
+      throw lastErr || new Error('realtime session post failed');
+    }
+
+    const upstream = await postSessionWithRetry({
+      model,
+      modalities: ['audio', 'text'],
+      voice: preferredVoice,
+      // Provide soft context tying the realtime agent to the authenticated user
+      instructions
     });
-    const data = await upstream.json();
-    if (!upstream.ok) return res.status(upstream.status).json(data);
+    let data = null;
+    try { data = await upstream.json(); } catch (_) { data = null; }
+    if (!upstream.ok) return res.status(upstream.status || 502).json(data || { error: 'upstream_failed' });
     const token = data?.client_secret?.value;
     if (!token) return res.status(500).json({ error: 'No client token in response' });
     res.json({ token, hasHistory, preferredVoice });
