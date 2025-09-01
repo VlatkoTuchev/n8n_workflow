@@ -91,6 +91,57 @@
             pointer-events: none;
             z-index: 100;
         }
+        /* Code Assist Panel */
+        .code-assist-panel {
+            position: fixed;
+            top: 0;
+            right: -620px;
+            width: 580px;
+            height: 100vh;
+            background: rgba(15, 22, 35, 0.9);
+            border-left: 1px solid rgba(148,163,184,.15);
+            box-shadow: -26px 0 80px rgba(0,0,0,0.45), 0 0 80px var(--glow);
+            backdrop-filter: blur(12px) saturate(120%);
+            color: var(--text);
+            z-index: 1200;
+            display: flex;
+            flex-direction: column;
+            transition: right 260ms ease;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            letter-spacing: .18px;
+            font-size: 15px;
+        }
+        .code-assist-panel.open { right: 0; }
+        .cap-header {
+            position: relative;
+            display: flex; align-items: center; justify-content: center;
+            padding: 16px 18px; border-bottom: 1px solid rgba(148,163,184,.15);
+            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+        }
+        .cap-title { font-weight: 800; font-size: 20px; letter-spacing: .25px; }
+        /* compact, floating close button in the top-right corner with 50% transparent background */
+        .cap-close { position: absolute; top: 10px; right: 12px; width: 28px; height: 28px; display: grid; place-items: center; background: rgba(255,255,255,.5); color: #0b1623; border: 0; cursor: pointer; font-size: 16px; border-radius: 9999px; padding: 0; line-height: 1; }
+        .cap-close:hover { filter: brightness(1.05); }
+        .cap-body { padding: 22px 22px 26px; overflow: auto; line-height: 1.7; }
+        .cap-section { margin-bottom: 22px; border: 1px solid rgba(148,163,184,.14); border-radius: 18px; padding: 18px 18px 16px; background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)); box-shadow: 0 12px 44px rgba(0,0,0,.38); }
+        .cap-kv { color: var(--muted); font-size: 14px; letter-spacing: .22px; margin-top: 6px; }
+        /* Increase value text size and spacing that follows a label */
+        .cap-section .cap-kv + div { font-size: 15.5px; margin: 6px 0 12px; }
+        .cap-pre { position: relative; background: #0b1020; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 16px 14px 14px; margin: 10px 0 16px; overflow: auto; box-shadow: inset 0 0 55px rgba(0,0,0,0.45); }
+        .cap-pre::before { content: attr(data-lang); position: absolute; top: 8px; right: 10px; font-size: 11px; color: #b6c5ff; opacity: .85; }
+        .cap-pre code { color: #dfe7ff; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 14.5px; line-height: 1.6; letter-spacing: .22px; }
+        .cap-list { margin: 10px 0 0 20px; color: var(--text); line-height: 1.65; }
+        /* Themed code backgrounds per language (approximate) */
+        .cap-pre[data-lang="python"] { background: linear-gradient(180deg, rgba(53,114,165,0.22), rgba(9,16,32,0.8)); }
+        .cap-pre[data-lang="javascript"], .cap-pre[data-lang="js"] { background: linear-gradient(180deg, rgba(247,223,30,0.16), rgba(9,16,32,0.8)); }
+        .cap-pre[data-lang="typescript"], .cap-pre[data-lang="ts"] { background: linear-gradient(180deg, rgba(0,122,204,0.20), rgba(9,16,32,0.8)); }
+        .cap-pre[data-lang="java"] { background: linear-gradient(180deg, rgba(244,68,62,0.16), rgba(9,16,32,0.8)); }
+        .cap-pre[data-lang="csharp"], .cap-pre[data-lang="cs"] { background: linear-gradient(180deg, rgba(97,218,251,0.14), rgba(9,16,32,0.8)); }
+        .cap-pre[data-lang="go"] { background: linear-gradient(180deg, rgba(0,173,216,0.18), rgba(9,16,32,0.8)); }
+        .cap-pre[data-lang="rust"] { background: linear-gradient(180deg, rgba(222,165,132,0.16), rgba(9,16,32,0.8)); }
+        .cap-pre[data-lang="php"] { background: linear-gradient(180deg, rgba(119,123,179,0.18), rgba(9,16,32,0.8)); }
+        .cap-pre[data-lang="ruby"] { background: linear-gradient(180deg, rgba(224,17,95,0.18), rgba(9,16,32,0.8)); }
+        .cap-pre[data-lang="sql"] { background: linear-gradient(180deg, rgba(106,115,125,0.18), rgba(9,16,32,0.8)); }
         .three-avatar-layer canvas {
             display: block;
             width: 100% !important;
@@ -672,6 +723,24 @@
                     },
                     {
                         type: 'function',
+                        name: 'open_code_assist_chat',
+                        description: 'Open a right-side panel with a compact coding help card: language, title, problem, code, explanation, and 2–4 next actions. Do NOT read code aloud; speak a brief summary only.',
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                language: { type: 'string', description: 'e.g., python, javascript, java, csharp, go, rust, php, ruby, sql' },
+                                title: { type: 'string' },
+                                problem: { type: 'string' },
+                                code: { type: 'string' },
+                                explanation: { type: 'string' },
+                                next_actions: { type: 'array', items: { type: 'string' } }
+                            },
+                            required: ['language','title','code','explanation'],
+                            additionalProperties: false
+                        }
+                    },
+                    {
+                        type: 'function',
                         name: 'fetch_chat_history',
                         description: 'Fetch chat logs by time window (yesterday, last_week, or custom date range)',
                         parameters: {
@@ -974,6 +1043,88 @@
                                 } catch (e) {
                                     dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'context_fetch_failed' }) } }));
                                 }
+                                if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
+                                return;
+                            }
+
+                            if (name === 'open_code_assist_chat') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {};
+                                try {
+                                    if (argStr && typeof argStr === 'string') args = JSON.parse(argStr);
+                                    else if (msg && (msg.arguments != null)) args = (typeof msg.arguments === 'string') ? JSON.parse(msg.arguments) : msg.arguments;
+                                } catch (_) { args = {}; }
+
+                                const language = String(args.language || 'text').toLowerCase();
+                                const title = String(args.title || 'Coding Help');
+                                const problem = String(args.problem || '');
+                                const code = String(args.code || '');
+                                const explanation = String(args.explanation || '');
+                                const nextActions = Array.isArray(args.next_actions) ? args.next_actions : [];
+
+                                function escapeHtml(s) {
+                                    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+                                }
+                                function ensurePanel() {
+                                    let el = document.getElementById('codeAssistPanel');
+                                    if (!el) {
+                                        el = document.createElement('div');
+                                        el.id = 'codeAssistPanel';
+                                        el.className = 'code-assist-panel';
+                                        el.innerHTML = `
+                                          <div class="cap-header">
+                                            <div class="cap-title">Coding Assistant</div>
+                                            <button class="cap-close" aria-label="Close">✕</button>
+                                          </div>
+                                          <div class="cap-body"></div>`;
+                                        document.body.appendChild(el);
+                                        el.querySelector('.cap-close').addEventListener('click', ()=> el.classList.remove('open'));
+                                    }
+                                    return el;
+                                }
+                const panel = ensurePanel();
+                const body = panel.querySelector('.cap-body');
+                const langLabel = language.charAt(0).toUpperCase() + language.slice(1);
+                body.innerHTML = '';
+                                const section = document.createElement('div');
+                                section.className = 'cap-section';
+                                section.innerHTML = `
+                                  <div class="cap-kv">Language</div>
+                                  <div style="margin-bottom:8px; font-weight:600;">${escapeHtml(langLabel)}</div>
+                                  <div class="cap-kv">Topic</div>
+                                  <div style="margin-bottom:8px">${escapeHtml(title)}</div>
+                                  ${problem ? `<div class=\"cap-kv\">Problem</div><div style=\"margin-bottom:8px\">${escapeHtml(problem)}</div>` : ''}
+                                  <div class="cap-kv">Code</div>
+                                  <pre class="cap-pre" data-lang="${escapeHtml(language)}"><code>${escapeHtml(code)}</code></pre>
+                                  <div class="cap-kv" style="margin-top:10px;">Explanation</div>
+                                  <div>${escapeHtml(explanation)}</div>
+                                  ${nextActions && nextActions.length ? `<div class=\"cap-kv\" style=\"margin-top:10px;\">Try next</div><ul class=\"cap-list\">${nextActions.map(a=>`<li>${escapeHtml(a)}</li>`).join('')}</ul>` : ''}
+                                `;
+                                body.appendChild(section);
+                panel.querySelector('.cap-title').textContent = title || 'Coding Assistant';
+                panel.classList.add('open');
+
+                // ESC to close
+                try {
+                    const escHandler = (e) => { if (e.key === 'Escape') panel.classList.remove('open'); };
+                    window.removeEventListener('keydown', escHandler);
+                    window.addEventListener('keydown', escHandler);
+                } catch(_) {}
+
+                                // Tell the model the panel is open AND give a concise content preview so it can refer to it on request
+                                const codePreview = code.split('\n').slice(0,12).join('\n').slice(0,600);
+                                const explanationShort = explanation.slice(0,600);
+                                const modelPayload = { ok:true, panel:'opened', language, title, code_preview: codePreview, explanation: explanationShort, next_actions: nextActions };
+                                dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(modelPayload) } }));
+
+                                // Save a short assistant turn only (not the full code)
+                                try {
+                                    const uid = await getUserId();
+                                    let sid = getSessionId(); if (!sid) sid = await startNewSessionForUser(uid);
+                                    const summary = `Opened coding help panel: ${langLabel} – ${title}.`;
+                                    await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'add_chat_turn', arguments:{ sessionId: sid, role:'assistant', content: summary } }) });
+                                } catch (_) {}
+
                                 if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
                                 return;
                             }
