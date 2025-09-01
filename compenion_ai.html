@@ -198,6 +198,26 @@
             width: 100% !important;
             height: 100% !important;
         }
+        /* Reactive bubble (top-left) */
+        #bubble {
+            --color: #4da3ff; /* mood color (default calm) */
+            --glow: 12px;     /* outer glow radius, animated */
+            position: fixed;
+            top: 150px;
+            left: 90px;
+            width: 52px;
+            height: 52px;
+            border-radius: 9999px;
+            background: radial-gradient(circle at 35% 35%, var(--color) 0%, rgba(255,255,255,0.18) 48%, rgba(20,40,64,0.6) 88%, rgba(11,22,35,0.95) 100%);
+            box-shadow:
+                0 0 var(--glow) var(--color),
+                inset 0 0 10px rgba(255,255,255,0.15);
+            will-change: transform, filter;
+            transform: scale(1);
+            transition: filter 60ms linear;
+            z-index: 2600;
+            pointer-events: none;
+        }
     </style>
     <script type="importmap">
     {
@@ -213,6 +233,8 @@
 </head>
 <body>
     <canvas id="bg"></canvas>
+    <div id="bubble"></div>
+    <audio id="remoteAudio" autoplay playsinline style="display:none"></audio>
     <div class="header">
         <div>
             <h1>📚 Course Finder Buddy</h1>
@@ -570,14 +592,10 @@
                 });
                 pc.addTransceiver('audio', { direction: 'sendrecv' });
 
-                const remoteAudioEl = document.createElement('audio');
-                remoteAudioEl.autoplay = true;
-                remoteAudioEl.playsInline = true;
-                remoteAudioEl.muted = false;
-                remoteAudioEl.volume = 1.0;
-                remoteAudioEl.crossOrigin = 'anonymous';
-                remoteAudioEl.style.display = 'none';
-                document.body.appendChild(remoteAudioEl);
+                // Use the dedicated <audio id="remoteAudio"> for playback
+                const remoteAudioEl = document.getElementById('remoteAudio') || (()=>{
+                    const a = document.createElement('audio'); a.id='remoteAudio'; a.autoplay=true; a.playsInline=true; a.style.display='none'; document.body.appendChild(a); return a;
+                })();
                 let remoteAudioAttached = false;
                 const ensurePlayback = async () => {
                     try { await remoteAudioEl.play(); } catch (err) {
@@ -592,6 +610,70 @@
                     }
                 };
 
+                // Audio envelope bubble via AudioWorklet (fallback to Analyser RMS)
+                const bubbleEl = document.getElementById('bubble');
+                const MOODS = { calm:'#4da3ff', excited:'#ffd166', nervous:'#ff5e57', neutral:'#9aa2ad' };
+                function setMood(mood){ const c = MOODS[mood] || MOODS.neutral; try { bubbleEl.style.setProperty('--color', c); } catch(_){} }
+                window.setMood = setMood; setMood('calm');
+
+                let env = 0; // from worklet/analysers, ~0..1
+                let rafId = 0;
+                const THRESHOLD = 0.015;   // noise floor
+                const SCALE_FACTOR = 2.0;  // mapping gain to size
+                const SCALE_MAX = 0.35;    // max extra scale
+                const GLOW_MAX = 72;       // px
+                function animateBubble(){
+                    const v = Math.max(0, env - THRESHOLD);
+                    const scale = 1 + Math.min(v * SCALE_FACTOR, SCALE_MAX);
+                    const glow = 10 + Math.min(v * 200, GLOW_MAX);
+                    bubbleEl.style.transform = `scale(${scale.toFixed(3)})`;
+                    bubbleEl.style.setProperty('--glow', `${glow}px`);
+                    rafId = requestAnimationFrame(animateBubble);
+                }
+                requestAnimationFrame(animateBubble);
+
+                let audioCtx = null, analyser = null, workletNode = null;
+                async function setupEnvelopeProcessing(stream){
+                    try {
+                        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+                        if (audioCtx.audioWorklet && typeof AudioWorkletNode === 'function') {
+                            try { await audioCtx.audioWorklet.addModule('/worklets/envelope-processor.js'); } catch (e) { /* fall back */ }
+                        }
+                        const src = audioCtx.createMediaStreamSource(stream);
+                        const sink = audioCtx.createGain(); sink.gain.value = 0; // pull graph, no audible output
+
+                        if (audioCtx.audioWorklet && typeof AudioWorkletNode === 'function') {
+                            try {
+                                workletNode = new AudioWorkletNode(audioCtx, 'envelope-processor', {
+                                    numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+                                    processorOptions: { attackMs: 8, releaseMs: 180, postEvery: 6 }
+                                });
+                                workletNode.port.onmessage = (e)=>{ if (e && e.data && typeof e.data.env === 'number') env = Math.max(0, Math.min(1, e.data.env)); };
+                                src.connect(workletNode).connect(sink).connect(audioCtx.destination);
+                                if (audioCtx.state !== 'running') await audioCtx.resume();
+                                return; // worklet active
+                            } catch(_) { /* fall back */ }
+                        }
+                        // Fallback: Analyser RMS
+                        analyser = audioCtx.createAnalyser();
+                        analyser.fftSize = 256; analyser.smoothingTimeConstant = 0.0;
+                        src.connect(analyser); analyser.connect(sink).connect(audioCtx.destination);
+                        const buf = new Float32Array(analyser.fftSize);
+                        const ATTACK = 0.28, RELEASE = 0.06; // EMA smoothing constants for fallback
+                        const tick = () => {
+                            analyser.getFloatTimeDomainData(buf);
+                            let sum = 0; for (let i=0;i<buf.length;i++){ const x = buf[i]; sum += x*x; }
+                            let rms = Math.sqrt(sum / buf.length); // ~0..1
+                            // smooth
+                            const k = (rms > env) ? ATTACK : RELEASE;
+                            env += (rms - env) * k;
+                            requestAnimationFrame(tick);
+                        };
+                        if (audioCtx.state !== 'running') await audioCtx.resume();
+                        tick();
+                    } catch (err) { console.warn('Envelope setup failed', err); }
+                }
+
                 pc.ontrack = (event) => {
                     if (remoteAudioAttached) return; // prevent double attachment/echo
                     const [stream] = event.streams;
@@ -604,6 +686,9 @@
                     } else {
                         remoteAudioEl.srcObject = stream;
                     }
+                    // Start envelope processing (AudioWorklet → fallback)
+                    const pipeStream = (remoteAudioEl && remoteAudioEl.srcObject) ? remoteAudioEl.srcObject : stream;
+                    setupEnvelopeProcessing(pipeStream);
                     remoteAudioAttached = true;
                     ensurePlayback();
                 };
