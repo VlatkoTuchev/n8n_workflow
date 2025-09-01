@@ -67,6 +67,10 @@ async function composeUserContextSummary(email, pgUserId) {
     const uid = u.id;
     // Prefer language from app table (Postgres UUID)
     let preferredLang = null;
+    // Continuation anchor derived from most recent user's message
+    let anchorText = null;
+    let anchorWhenLocal = null;
+    let anchorWhenIso = null;
     try {
       if (pgUserId) {
         const lang = await query(`SELECT preferred_language FROM user_language WHERE user_id = $1`, [pgUserId]);
@@ -304,7 +308,7 @@ app.all('/realtime/token', authRequired, async (req, res) => {
       pushSection('Open Questions', top?.open_questions);
       workingPack = lines.join('\n').trim();
     } catch (_) {}
-    // Build last N summaries (newest first), deduplicate near-duplicates for concision
+    // Build last summaries (newest first), deduplicate and filter for recency and off-topic drift
     let recentSummariesBlock = '';
     try {
       const rs = await query(
@@ -332,13 +336,23 @@ app.all('/realtime/token', authRequired, async (req, res) => {
             if (jaccard(n, k.n) >= 0.82) { similar = true; break; }
           }
           if (!similar) kept.push({ n, row: rs.rows[i] });
-          if (kept.length >= 3) break; // keep at most 3 distinct summaries
+          if (kept.length >= 1) break; // keep only the single clearest recent summary
         }
-        recentSummariesBlock = kept.map((rec, i) => {
-          const row = rec.row;
-          const iso = row.created_at ? new Date(row.created_at).toISOString() : 'unknown-date';
-          return `S${i+1} [${iso}]: ${String(row.summary || '').trim()}`;
-        }).join('\n\n');
+        if (kept.length) {
+          // Recency and topic filters
+          const row = kept[0].row;
+          const created = row.created_at ? new Date(row.created_at) : null;
+          const ageMin = created ? Math.floor((Date.now() - created.getTime())/60000) : null;
+          const textLower = String(row.summary || '').toLowerCase();
+          const offTopicHints = ['fitness','workout','morning routine','diet'];
+          const offTopic = offTopicHints.some(t => textLower.includes(t));
+          if (ageMin != null && ageMin <= 360 && !offTopic) {
+            const iso = created ? created.toISOString() : 'unknown-date';
+            recentSummariesBlock = `S1 [${iso}]: ${String(row.summary || '').trim()}`;
+          } else {
+            recentSummariesBlock = '';
+          }
+        }
       }
     } catch (_) {}
 
@@ -356,13 +370,19 @@ app.all('/realtime/token', authRequired, async (req, res) => {
         userDisplayName = String(req.user.email).split('@')[0];
       }
     } catch (_) {}
+    // Placeholders for strict continuation anchor derived from the last user message
+    let anchorText = null;
+    let anchorWhenLocal = null;
+    let anchorWhenIso = null;
     try {
+      const excerptSessions = Math.max(1, Math.min(10, Number(process.env.CONVO_EXCERPT_SESSIONS || 8)));
+      const tailTurns = Math.max(6, Math.min(30, Number(process.env.CONVO_TAIL_TURNS || 18)));
       const rows = await query(
         `SELECT content, updated_at
            FROM chat_message
           WHERE user_id = $1
           ORDER BY updated_at DESC
-          LIMIT 1`,
+          LIMIT ${excerptSessions}`,
         [req.user?.pgUserId || null]
       );
       if (rows && rows.rows && rows.rows.length) {
@@ -373,10 +393,28 @@ app.all('/realtime/token', authRequired, async (req, res) => {
           if (i === 0) lastConversationUpdatedAt = updated;
           let arr = [];
           try { arr = Array.isArray(r.content) ? r.content : JSON.parse(r.content || '[]'); } catch (_) { arr = []; }
-          // Take the last 6 turns for brevity
-          const tail = Array.isArray(arr) ? arr.slice(-6) : [];
+          // Take the last N turns for continuity (configurable)
+          const tail = Array.isArray(arr) ? arr.slice(-tailTurns) : [];
+          let hasUserTurn = false;
+          // Compute anchor from the last USER message (only on most recent row)
+          if (i === 0 && Array.isArray(arr) && arr.length) {
+            for (let j = arr.length - 1; j >= 0; j--) {
+              const m = arr[j];
+              if (m && (m.role === 'user' || m.role === 'User')) {
+                const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+                anchorText = (m.text != null ? String(m.text) : String(m?.content || '')).trim();
+                if (m && typeof m.at_local === 'string' && m.at_local.trim()) {
+                  anchorWhenLocal = `${m.at_local} ${tz}`;
+                } else if (m && typeof m.at === 'string' && m.at.trim()) {
+                  try { const d = new Date(m.at); const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }); anchorWhenLocal = `${fmt.format(d)} ${tz}`; anchorWhenIso = d.toISOString(); } catch(_) {}
+                }
+                break;
+              }
+            }
+          }
           const lines = tail.map(m => {
             const role = (m && m.role === 'model') ? 'Assistant' : 'User';
+            if (role === 'User') hasUserTurn = true;
             const text = (m && m.text != null) ? String(m.text) : String(m?.content || '');
             // Prefer local timestamp if present in stored JSON
             const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
@@ -401,7 +439,9 @@ app.all('/realtime/token', authRequired, async (req, res) => {
             }
           } catch(_) { updatedLocal = null; }
           const header = updatedLocal ? `Conversation [${iso} | local ${updatedLocal}]` : `Conversation [${iso}]`;
-          chunks.push(`${header}\n${lines.join('\n')}`);
+          if (hasUserTurn) {
+            chunks.push(`${header}\n${lines.join('\n')}`);
+          }
         }
         recentConvosBlock = chunks.join('\n\n');
       }
@@ -455,6 +495,7 @@ First turn policy:
   Guardrails:
    - Stay focused on the learner’s topics and progress; avoid speculation
    - Do NOT introduce personal topics (e.g., health/fitness) unless the user raises them or they are present in the provided memory/excerpts
+   - Do NOT perform device/audio checks or say phrases like “I can hear you”, “testing mic”, or “I’m listening” — simply begin the conversation naturally
    - Be transparent if unsure and ask a clarifying question
    - Never claim to read private data; use only provided memory/context
    - Don’t restate the entire memory pack; weave it naturally
@@ -465,14 +506,18 @@ First turn policy:
    - Do NOT say that you can see through the users camera feed also do NOT mention the camera at all and users background.
   
    Tool use (if available):
-      - Use get_user_context for details on upcoming/attended/favorites/quizzes when needed
-      - Use set_preferred_language when the learner asks to change language
-      - For set_agent_settings (name, voice, style):
+   - Use get_user_context for details on upcoming/attended/favorites/quizzes and recent event transcripts when needed
+   - Use set_preferred_language when the learner asks to change language
+   - For set_agent_settings (name, voice, style):
         * Always use the user's configured settings (do not fall back to defaults).
         * After changing voice or style, explicitly tell the user to reload the page so the new settings apply to the next session. Keep it to one short line (e.g., "Settings updated — please reload the page to apply the new voice.").
         * Do NOT claim the change is live now and do NOT say “let me know how it sounds”; changes take effect only after a reload/new session.
       - Use open_code_assist_chat when the learner asks for coding help (e.g., “variables in Python”). Provide a compact title, short problem summary, one focused code block, and a concise explanation with 2–4 bullet actions. Do NOT read the code aloud; instead speak a brief 1–2 sentence summary and let the panel carry the details. If the learner asks about the panel’s content, use the provided panel preview (code_preview, explanation) to answer succinctly; reference variable names or line positions, but avoid reading the full code.
-      - Prefer memory/digest first; use tools after the greeting and only between turns
+      - For a new topic/segment (e.g., “now show classes”), call open_code_assist_chat again to APPEND a new block below the previous one so the user can scroll through a growing lesson.
+      - Use update_code_assist_chat to refine the existing panel dynamically (append/replace code or explanation, add steps). By default it edits the latest block; pass block_index to target an earlier block. Keep spoken output brief while the panel updates visually.
+      - For event follow‑ups: If the learner attended a course recently, offer a short quiz. Use get_event_quiz to fetch existing MCQs and submit_event_quiz to grade and persist results. Keep spoken guidance brief and encouraging. If no quiz is found, say so and offer a summary or practice instead.
+      - Do NOT use the code assist panel for quizzes. Quizzes must appear in the dedicated quiz modal only.
+   - Prefer memory/digest first; use tools after the greeting and only between turns
 
 Safety & inclusion: Be culturally respectful; avoid probing sensitive info; normalize struggle; praise effort and strategy.`;
     const now = new Date();
@@ -499,9 +544,13 @@ Safety & inclusion: Be culturally respectful; avoid probing sensitive info; norm
       `Current date/time (${tz}): ${nowLocal}`,
       `Current date/time (UTC): ${nowIso}`
     ];
-    if (agentName) insParts.push(`Agent name policy:\n- Your current name is "${agentName}".\n- When asked your name, answer using this name verbatim (e.g., "I'm ${agentName}", or "You can call me ${agentName}").\n- Override any earlier mentions or defaults (do NOT use "Nova" unless this policy sets it).\n- If the learner asks to change it, confirm and adapt.`);
+    if (agentName) insParts.push(`Agent name policy:\n- Your current name is "${agentName}" (this is the ASSISTANT'S name).\n- When asked your name, answer using this name verbatim (e.g., "I'm ${agentName}").\n- NEVER address the learner by this name.\n- Override any earlier mentions or defaults (do NOT use "Nova" unless this policy sets it).\n- If the learner asks to change it, confirm and adapt.`);
     if (agentStyle) insParts.push(`Agent style preference:\n- Maintain this baseline style across turns: ${agentStyle}.\n- Keep responses clear, concise, and on-task while reflecting the style.\n- If the learner asks to change it, confirm and adapt.`);
     if (contextSummary) insParts.push(`Context for personalization:\n${contextSummary}`);
+    // Provide a clear user display name for greetings to avoid confusing the assistant name with the user name
+    if (userDisplayName) {
+      insParts.push(`User identity:\n- Preferred display name for the learner: ${userDisplayName}.\n- Use this name (or second-person "you"). Do NOT call the learner by your own agent name.`);
+    }
     if (hasHistory && recentSummariesBlock) insParts.push(`Recent session summaries (NEWEST FIRST; prefer newest on conflict):\n${recentSummariesBlock}`);
     if (hasHistory && workingPack) insParts.push(`Working Memory Pack (use naturally; do not restate verbatim):\n${workingPack}`);
     if (hasHistory && recentConvosBlock) {
@@ -517,13 +566,22 @@ Welcome policy (FIRST CONTACT ONLY):
 - Introduce yourself with a friendly, memorable name (e.g., “Hi! I’m Nova—your learning companion”).
 - Explicitly offer to change your name if the user prefers (“If you want me to go by a different name, just tell me”).
 - In 1–2 short sentences, give an upbeat welcome and invite a first step or question.
- - Keep it natural—avoid stock phrases like “Hi there,” and vary the opening line.`
+- Keep it natural—avoid stock phrases like “Hi there,” and vary the opening line.`
       );
     }
-    // Add recency-aware and post-reload greeting guidance (placed after core guidance to override tone)
+    // If available, include a strict continuation anchor from the user's last message
+    if (anchorText) {
+      const tag = anchorWhenLocal ? `[${anchorWhenLocal}]` : '';
+      insParts.push(`Continuation anchor (MANDATORY):\n- Last user message ${tag}: \"${anchorText}\"\n- Your next reply MUST respond to THIS line first. If any assistant line conflicts, ignore it. Do NOT introduce unrelated topics (e.g., travel/fitness) unless present in this anchor or the excerpt.`);
+    } else {
+      insParts.push(`If no explicit last-user anchor is available:\n- Do NOT assume prior topics.\n- Ask ONE short clarifying question to locate where to continue (e.g., “Want to pick up from our last topic or start fresh?”).`);
+    }
+    // Add recency-aware and post-reload + refresh-count greeting guidance (placed after core guidance to override tone)
     try {
       const postReload = (() => { try { const v = String(req.query?.post_settings_reload || '').toLowerCase(); return v === '1' || v === 'true' || v === 'yes'; } catch (_) { return false; } })();
       const postReloadWhy = (() => { try { return String(req.query?.post_settings_reload_why || '').toLowerCase(); } catch (_) { return ''; } })();
+      const refreshCount = (() => { try { return Number(req.query?.refresh_count || 0) || 0; } catch(_) { return 0; } })();
+      const sinceLastMs = (() => { try { const v = Number(req.query?.since_last_ms || ''); return isNaN(v) ? null : v; } catch(_) { return null; } })();
       let recencyMinutes = null;
       if (lastConversationUpdatedAt) {
         const diffMs = Date.now() - lastConversationUpdatedAt.getTime();
@@ -537,6 +595,12 @@ Welcome policy (FIRST CONTACT ONLY):
         lines.push(`- The user just reloaded after changing ${what}. Start with a brief, natural check that the new ${what} feels right (one short line), then continue without re‑introducing yourself.`);
         lines.push('- Avoid generic greetings like “Hi there” or “Hello again.” If recent, acknowledge the quick return.');
       }
+      // Refresh count heuristics from the client (last 2 minutes)
+      if (refreshCount && refreshCount >= 3) {
+        lines.push('- The page has been refreshed multiple times in a short window; optionally add a playful one-liner about refreshing, then continue. Keep it kind and brief.');
+      } else if (sinceLastMs != null && sinceLastMs <= 90_000) {
+        lines.push('- Return is very recent (≤90s); acknowledge timing in one short line and pick up the thread immediately.');
+      }
       if (recencyMinutes != null) {
         lines.push(`- Last conversation updated ~${recencyMinutes} min ago. Adjust tone:`);
         if (recencyMinutes <= 5) lines.push('  * <=5 min: note they’re back fast (1 short line), then continue.');
@@ -547,16 +611,15 @@ Welcome policy (FIRST CONTACT ONLY):
         lines.push('- No timestamp available: use a concise, non‑repetitive opener and continue quickly.');
       }
       lines.push('- Vary openings across sessions; avoid repeating phrasing. Keep it fresh and human.');
+      // Enforce a concrete first-turn behavior to pick up the thread from the excerpt
+      lines.push('- FIRST SENTENCE MUST be a brief, natural greeting (use the learner’s display name if provided). Never start mid-task, with tool requests, or with device/mic checks.');
+      lines.push('- On the very first turn: read the most recent conversation excerpt, reference exactly one concrete detail from the user’s last message, and continue without re‑introducing yourself.');
+      lines.push('- If the learner explicitly asks “what did we last talk about?”, answer with a 1–2 line summary drawn ONLY from the most recent excerpt, then ask a single follow‑up question.');
       insParts.push(lines.join('\n'));
     } catch (_) {}
     const instructionsFull = insParts.join('\n\n');
+    // Send full instructions without truncation per request
     let instructions = instructionsFull;
-    // Allow larger instruction payloads so critical recency/excerpts are preserved.
-    // Keep a generous cap to avoid pathological bloat while preserving needed context.
-    const MAX_INS = Math.max(12000, Number(process.env.MAX_INSTRUCTIONS_CHARS || 12000));
-    if (instructions.length > MAX_INS) {
-      instructions = instructions.slice(0, MAX_INS - 3) + '...';
-    }
 
     // Optional debug log of what we inject (full when debug is enabled)
     try {
@@ -805,8 +868,8 @@ app.get('/user/context', authRequired, async (req, res) => {
       [mysqlUserId]
     );
 
-    // Materials for user's attended or favorited events
-    const materials = await query(
+  // Materials for user's attended or favorited events
+  const materials = await query(
       `SELECT m.event_id, m.title, m.type, m.data, m.created_at
          FROM event_materials_mysql_mirror m
          WHERE m.event_id IN (
@@ -817,7 +880,23 @@ app.get('/user/context', authRequired, async (req, res) => {
         ORDER BY m.created_at DESC
         LIMIT 200`,
       [mysqlUserId]
+  );
+
+  // Transcripts for events the user attended (limit 5 newest)
+  let transcripts = null;
+  try {
+    transcripts = await query(
+      `SELECT t.event_id, e.title, t.transcript, t.created_at
+         FROM events_transcript_mysql_mirror t
+         JOIN events_mysql_mirror e ON e.id = t.event_id
+        WHERE t.event_id IN (
+          SELECT event_id FROM event_attendances_mysql_mirror WHERE user_id = $1
+        )
+        ORDER BY t.created_at DESC
+        LIMIT 5`,
+      [mysqlUserId]
     );
+  } catch (_) { transcripts = { rows: [] }; }
 
     // Quiz attempts and responses
     const quizAttempts = await query(
@@ -885,6 +964,7 @@ app.get('/user/context', authRequired, async (req, res) => {
       upcoming_events: upcoming.rows,
       attended_events: attended.rows,
       materials: materials.rows,
+      transcripts: transcripts.rows,
       quiz_attempts: quizAttempts.rows,
       quiz_responses: quizResponses.rows,
       webinar_qa: webinarQA.rows,
@@ -1021,6 +1101,55 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       const out = await saveSessionSummary({ sessionId, userId: authedUserId, summary });
       console.log('[summary] saved id', out.id);
       return res.json({ ok: true, id: out.id });
+    }
+
+    if (toolName === 'enter_event') {
+      try {
+        const { event_id, sessionId } = args || {};
+        const eid = Number(event_id);
+        if (!eid || isNaN(eid)) return res.status(400).json({ ok:false, error:'event_id required' });
+        const userEmail = (req.user && req.user.email) || null;
+        if (!userEmail) return res.status(401).json({ ok:false, error:'auth_required' });
+        // Ensure MySQL user exists and fetch numeric id
+        let mysqlUserId = null;
+        try { const u = await mysqlDb.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [userEmail]); if (u && u.length) mysqlUserId = u[0].id; } catch(_) {}
+        if (!mysqlUserId) { try { await ensureMysqlUserForEmail(userEmail, null); } catch(_) {}
+          try { const u2 = await mysqlDb.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [userEmail]); if (u2 && u2.length) mysqlUserId = u2[0].id; } catch(_) {}
+        }
+        if (!mysqlUserId) return res.status(500).json({ ok:false, error:'user_not_in_mysql' });
+
+        // Idempotent create/update of attendance
+        let attendanceId = null;
+        try {
+          const existing = await mysqlDb.query(`SELECT id FROM event_attendances WHERE user_id=? AND event_id=? LIMIT 1`, [mysqlUserId, eid]);
+          if (existing && existing.length) {
+            attendanceId = existing[0].id;
+            await mysqlDb.query(`UPDATE event_attendances SET joined_at=COALESCE(joined_at, NOW()), left_at=NULL, updated_at=NOW() WHERE id=?`, [attendanceId]);
+          } else {
+            await mysqlDb.query(`INSERT INTO event_attendances (user_id, event_id, joined_at, created_at, updated_at) VALUES (?,?,NOW(),NOW(),NOW())`, [mysqlUserId, eid]);
+            const r2 = await mysqlDb.query(`SELECT id FROM event_attendances WHERE user_id=? AND event_id=? ORDER BY id DESC LIMIT 1`, [mysqlUserId, eid]);
+            attendanceId = r2 && r2.length ? r2[0].id : null;
+          }
+        } catch (e) {
+          // Fallback: try minimal insert without timestamps
+          try {
+            await mysqlDb.query(`INSERT INTO event_attendances (user_id, event_id) VALUES (?,?)`, [mysqlUserId, eid]);
+          } catch(_) {}
+        }
+
+        // Optional: log to chat for realtime awareness
+        try {
+          if (sessionId) {
+            await addChatTurn(sessionId, 'user', `I entered event ${eid}.`);
+            try { await addChatMessage({ sessionId, userId: authedUserId, role: 'user', content: `I entered event ${eid}.` }); } catch(_) {}
+          }
+        } catch (_) {}
+
+        return res.json({ ok:true, attendance_id: attendanceId, event_id: eid, user_id: mysqlUserId });
+      } catch (e) {
+        console.error('enter_event error', e);
+        return res.status(500).json({ ok:false, error:'enter_event_failed' });
+      }
     }
 
     if (toolName === 'summarize_session' || toolName === 'finalize_session') {
@@ -1190,6 +1319,112 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       } catch (e) {
         console.error('recommend_courses error', e);
         return res.status(500).json({ ok: false, error: 'recommend_courses_failed' });
+      }
+    }
+
+    // NOTE: Quiz generation removed; quizzes are retrieved from Postgres mirror tables
+
+    if (toolName === 'get_event_quiz') {
+      try {
+        const { event_id } = args || {};
+        const eid = Number(event_id);
+        if (!eid || isNaN(eid)) return res.status(400).json({ ok:false, error:'event_id required' });
+        // Read quiz metadata and questions from Postgres mirrors
+        const qh = await query(`SELECT id FROM event_quizzes_mysql_mirror WHERE event_id = $1 ORDER BY id DESC LIMIT 1`, [eid]);
+        const quizId = qh && qh.rows && qh.rows[0] && qh.rows[0].id;
+        if (!quizId) return res.status(404).json({ ok:false, error:'quiz_not_found' });
+        const rows = await query(`SELECT id, question, options FROM event_quiz_questions_mysql_mirror WHERE event_quiz_id = $1 ORDER BY id ASC`, [quizId]);
+        const items = (rows.rows || []).map(r => ({ id: r.id, question: r.question, options: (typeof r.options === 'string' ? JSON.parse(r.options) : r.options) }));
+        // Limit to 5 questions if larger
+        const limited = items.slice(0, 5);
+        return res.json({ ok:true, event_id: eid, quiz_id: quizId, questions: limited });
+      } catch (e) {
+        console.error('get_event_quiz error', e);
+        return res.status(500).json({ ok:false, error:'get_event_quiz_failed' });
+      }
+    }
+
+    if (toolName === 'submit_event_quiz') {
+      try {
+        const { event_id, answers } = args || {};
+        const eid = Number(event_id);
+        if (!eid || isNaN(eid)) return res.status(400).json({ ok:false, error:'event_id required' });
+        if (!answers || typeof answers !== 'object') return res.status(400).json({ ok:false, error:'answers object required' });
+
+        const qr = await query(`SELECT id FROM event_quizzes_mysql_mirror WHERE event_id = $1 ORDER BY id DESC LIMIT 1`, [eid]);
+        const quizId = (qr && qr.rows && qr.rows[0] && qr.rows[0].id) || null;
+        if (!quizId) return res.status(404).json({ ok:false, error:'quiz_not_found' });
+        const qsRes = await query(`SELECT id, correct_option_index FROM event_quiz_questions_mysql_mirror WHERE event_quiz_id = $1 ORDER BY id ASC`, [quizId]);
+        const qsAll = qsRes.rows || [];
+        if (!qsAll.length) return res.status(404).json({ ok:false, error:'questions_not_found' });
+        // Keep the same subset the client shows (first 5)
+        const qs = qsAll.slice(0, 5);
+
+        // Resolve MySQL numeric user_id for attempts/responses
+        const userEmail = (req.user && req.user.email) || null;
+        if (!userEmail) return res.status(401).json({ ok:false, error:'auth_required' });
+        let mysqlUserId = null;
+        try {
+          const urows = await mysqlDb.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [userEmail]);
+          if (urows && urows.length) mysqlUserId = urows[0].id;
+        } catch (_) {}
+        if (!mysqlUserId) {
+          try { await ensureMysqlUserForEmail(userEmail, null); } catch(_) {}
+          try {
+            const u2 = await mysqlDb.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [userEmail]);
+            if (u2 && u2.length) mysqlUserId = u2[0].id;
+          } catch(_) {}
+        }
+        if (!mysqlUserId) return res.status(500).json({ ok:false, error:'user_not_in_mysql' });
+
+        // Compute attempt number
+        let attemptNo = 1;
+        try {
+          const ar = await mysqlDb.query(`SELECT COALESCE(MAX(attempt_number),0)+1 AS n FROM event_quiz_attempts WHERE user_id=? AND event_quiz_id=?`, [mysqlUserId, quizId]);
+          attemptNo = (ar && ar[0] && ar[0].n) || 1;
+        } catch(_) {}
+
+        // Insert attempt header (include optional questions_shown_ids if present in schema)
+        let hasQuestionsShown = false;
+        try {
+          const cols = await mysqlDb.query(`SHOW COLUMNS FROM event_quiz_attempts`);
+          hasQuestionsShown = Array.isArray(cols) && cols.some(c => String(c.Field || '').toLowerCase() === 'questions_shown_ids');
+        } catch (_) { hasQuestionsShown = false; }
+        if (hasQuestionsShown) {
+          const shown = JSON.stringify(qs.map(q => q.id));
+          await mysqlDb.query(
+            `INSERT INTO event_quiz_attempts (user_id, event_quiz_id, attempt_number, questions_shown_ids, score_percentage, passed, started_at, completed_at, created_at, updated_at)
+             VALUES (?,?,?,?,0,0,NOW(),NOW(),NOW(),NOW())`,
+            [mysqlUserId, quizId, attemptNo, shown]
+          );
+        } else {
+          await mysqlDb.query(
+            `INSERT INTO event_quiz_attempts (user_id, event_quiz_id, attempt_number, score_percentage, passed, started_at, completed_at, created_at, updated_at)
+             VALUES (?,?,?,0,0,NOW(),NOW(),NOW(),NOW())`,
+            [mysqlUserId, quizId, attemptNo]
+          );
+        }
+        const attemptIdRow = await mysqlDb.query(`SELECT id FROM event_quiz_attempts WHERE user_id=? AND event_quiz_id=? ORDER BY id DESC LIMIT 1`, [mysqlUserId, quizId]);
+        const attemptId = attemptIdRow && attemptIdRow[0] && attemptIdRow[0].id;
+
+        // Grade
+        let correct = 0;
+        for (const q of qs) {
+          const qid = q.id;
+          const sel = Number(answers[qid]);
+          const ok = (!Number.isNaN(sel) && sel === Number(q.correct_option_index));
+          if (ok) correct++;
+          if (!isNaN(sel)) {
+            await mysqlDb.query(`INSERT INTO event_quiz_responses (event_quiz_attempt_id, event_quiz_question_id, selected_option_index, is_correct, answered_at, created_at, updated_at) VALUES (?,?,?,?,NOW(),NOW(),NOW())`, [attemptId, qid, sel, ok ? 1 : 0]);
+          }
+        }
+        const pct = Math.round((correct / Math.max(1, qs.length)) * 100);
+        const passed = pct >= 70 ? 1 : 0;
+        await mysqlDb.query(`UPDATE event_quiz_attempts SET score_percentage=?, passed=?, completed_at=NOW(), updated_at=NOW() WHERE id=?`, [pct, passed, attemptId]);
+        return res.json({ ok:true, attempt_id: attemptId, score: pct, passed: !!passed, total: qs.length, correct });
+      } catch (e) {
+        console.error('submit_event_quiz error', e);
+        return res.status(500).json({ ok:false, error:'submit_event_quiz_failed' });
       }
     }
 

@@ -7,6 +7,10 @@
     <link rel="stylesheet" href="/auth.css" />
     <script src="/auth-bg.js" defer></script>
     <style>
+        :root {
+            /* Ensure quiz button gradient has both stops available */
+            --primary-600: #46c2f5;
+        }
         * {
             margin: 0;
             padding: 0;
@@ -127,10 +131,57 @@
         .cap-kv { color: var(--muted); font-size: 14px; letter-spacing: .22px; margin-top: 6px; }
         /* Increase value text size and spacing that follows a label */
         .cap-section .cap-kv + div { font-size: 15.5px; margin: 6px 0 12px; }
-        .cap-pre { position: relative; background: #0b1020; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 16px 14px 14px; margin: 10px 0 16px; overflow: auto; box-shadow: inset 0 0 55px rgba(0,0,0,0.45); }
+        .cap-pre { position: relative; background: #0b1020; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 16px 14px 36px 14px; margin: 10px 0 16px; overflow: auto; box-shadow: inset 0 0 55px rgba(0,0,0,0.45); }
         .cap-pre::before { content: attr(data-lang); position: absolute; top: 8px; right: 10px; font-size: 11px; color: #b6c5ff; opacity: .85; }
         .cap-pre code { color: #dfe7ff; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 14.5px; line-height: 1.6; letter-spacing: .22px; }
         .cap-list { margin: 10px 0 0 20px; color: var(--text); line-height: 1.65; }
+        /* Copy button inside code block */
+        .cap-copy {
+            position: absolute; right: 10px; bottom: 8px; display: grid; place-items: center;
+            width: 26px; height: 26px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.18);
+            background: rgba(0,0,0,0.5); color: #e6edf3; font-size: 12px; cursor: pointer; opacity: 0; transition: opacity 120ms ease; line-height: 1;
+        }
+        .cap-copy:hover { background: rgba(255,255,255,0.12); }
+        .cap-pre:hover .cap-copy { opacity: 1; }
+        .cap-copied { position: absolute; bottom: 8px; right: 10px; font-size: 11px; color: #b6ffc0; opacity: .9; }
+
+        /* Launcher button to reopen the panel */
+        .code-assist-launcher {
+            position: fixed; bottom: 22px; right: 22px; width: 48px; height: 48px;
+            display: none; place-items: center;
+            background: radial-gradient(circle at 30% 30%, #6dd3fb, #46c2f5);
+            color: #04121a; border: 0; border-radius: 50%; box-shadow: 0 12px 30px rgba(0,0,0,.45);
+            font-weight: 800; font-size: 14px; cursor: pointer; z-index: 1400;
+        }
+        .code-assist-launcher:hover { filter: brightness(1.05); }
+
+        /* Quiz Modal */
+        .quiz-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(6,10,18,0.65); backdrop-filter: blur(6px); z-index: 2000; }
+        .quiz-overlay.open { display: flex; }
+        .quiz-modal { width: min(760px, 92vw); max-height: 86vh; overflow: hidden; border-radius: 18px; background: rgba(15,22,35,0.96); border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 40px 90px rgba(0,0,0,0.65); color: var(--text); transform: translateY(6px); animation: quizIn 260ms ease forwards; }
+        @keyframes quizIn { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .quiz-header { position: relative; display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; background: linear-gradient(180deg, rgba(22,30,48,1), rgba(22,30,48,.92)); border-bottom: 1px solid rgba(255,255,255,0.12); border-top-left-radius: 18px; border-top-right-radius: 18px; }
+        .quiz-title { font-weight: 900; font-size: 18px; letter-spacing: .2px; display: flex; gap: 10px; align-items: center; }
+        .quiz-progress { color: var(--muted); font-weight: 700; font-size: 13px; opacity: .9; }
+        .quiz-close { position: absolute; top: 50%; transform: translateY(-54%); right: 12px; width: 30px; height: 30px; padding: 0; border-radius: 9999px; border: 1px solid rgba(255,255,255,0.22); background: rgba(255,255,255,0.12); color: #e6edf3; font-weight: 900; cursor: pointer; display: inline-grid; place-items: center; line-height: 1; font-size: 16px; text-align: center; }
+        .quiz-close:hover { background: rgba(255,255,255,0.2); }
+        .quiz-body { padding: 18px; overflow: auto; max-height: calc(86vh - 64px); }
+        .quiz-q { margin-bottom: 14px; font-weight: 900; font-size: 16px; letter-spacing: .2px; }
+        .quiz-opt { position: relative; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); padding: 12px 14px; border-radius: 14px; margin: 10px 0; display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: center; cursor: pointer; transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease; }
+        .quiz-opt:hover { border-color: rgba(109,211,251,0.35); box-shadow: 0 4px 18px rgba(109,211,251,0.15) inset; }
+        .quiz-opt input { appearance: none; width: 0; height: 0; position: absolute; opacity: 0; }
+        .quiz-bullet { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(200,211,230,.6); display: grid; place-items: center; transition: all 140ms ease; }
+        .quiz-bullet::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: transparent; transition: background 140ms ease; }
+        .quiz-opt.selected { background: linear-gradient(180deg, rgba(109,211,251,0.12), rgba(255,255,255,0.02)); border-color: rgba(109,211,251,0.55); box-shadow: 0 6px 22px rgba(109,211,251,0.22) inset; }
+        .quiz-opt.selected .quiz-bullet { border-color: #6dd3fb; }
+        .quiz-opt.selected .quiz-bullet::after { background: #6dd3fb; }
+        .quiz-text { line-height: 1.55; }
+        .quiz-actions { position: sticky; bottom: 0; background: rgba(15,22,35,0.98); padding: 12px 0 10px; display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); }
+        .quiz-btn { padding: 12px 18px; min-width: 130px; text-align: center; border-radius: 12px; border: 0; font-weight: 900; letter-spacing: .25px; cursor: pointer; background: linear-gradient(180deg, var(--primary), var(--primary-600, var(--primary))); color: #0b1623; box-shadow: 0 8px 24px rgba(109,211,251,0.25); transition: filter 140ms ease, transform 140ms ease; }
+        .quiz-btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
+        .quiz-btn:disabled { opacity: .6; cursor: not-allowed; box-shadow: none; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: rgba(230,237,243,0.7); }
+        .quiz-secondary { background: rgba(255,255,255,0.1); color: var(--text); border: 1px solid rgba(255,255,255,0.16); }
+        .quiz-score { font-weight: 800; }
         /* Themed code backgrounds per language (approximate) */
         .cap-pre[data-lang="python"] { background: linear-gradient(180deg, rgba(53,114,165,0.22), rgba(9,16,32,0.8)); }
         .cap-pre[data-lang="javascript"], .cap-pre[data-lang="js"] { background: linear-gradient(180deg, rgba(247,223,30,0.16), rgba(9,16,32,0.8)); }
@@ -155,6 +206,10 @@
         }
     }
     </script>
+    <!-- Prism.js for syntax highlighting -->
+    <link rel="stylesheet" href="https://unpkg.com/prismjs@1.29.0/themes/prism-tomorrow.min.css" />
+    <script src="https://unpkg.com/prismjs@1.29.0/prism.min.js" defer></script>
+    <script src="https://unpkg.com/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
 </head>
 <body>
     <canvas id="bg"></canvas>
@@ -227,6 +282,10 @@
                 </div>
             </div>
         </div>
+
+        <h2 style="color: #4a4a4a; margin: 28px 0 10px;">Upcoming Events</h2>
+        <p style="color: #7a7a7a;">Join an event to unlock its quiz and personalized follow‑ups</p>
+        <div class="course-grid" id="eventsList"></div>
     </div>
 
     <!-- 3D Avatar Layer -->
@@ -579,15 +638,29 @@
                 let wasPostSettingsReload = false;
                 let postSettingsReloadWhy = '';
                 try {
-                    // Pass a hint if this page was just reloaded after changing agent settings
+                    // Build token URL with reload heuristics (so server can tune the first-turn style)
                     let tokenUrl = '/realtime/token';
+                    // Track recent reloads in the last 2 minutes
+                    try {
+                        const now = Date.now();
+                        const key = 'reload_ts';
+                        let arr = [];
+                        try { arr = JSON.parse(localStorage.getItem(key) || '[]'); } catch(_) { arr = []; }
+                        arr = Array.isArray(arr) ? arr.filter(ts => Number(ts) && (now - Number(ts) <= 120000)) : [];
+                        arr.push(now);
+                        localStorage.setItem(key, JSON.stringify(arr));
+                        const refreshCount = arr.length;
+                        const sinceLastMs = arr.length >= 2 ? (arr[arr.length - 1] - arr[arr.length - 2]) : '';
+                        tokenUrl += `?refresh_count=${encodeURIComponent(String(refreshCount))}` + (sinceLastMs !== '' ? `&since_last_ms=${encodeURIComponent(String(sinceLastMs))}` : '');
+                    } catch(_) {}
+                    // Pass a hint if this page was just reloaded after changing agent settings
                     try {
                         const pr = localStorage.getItem('post_settings_reload');
                         wasPostSettingsReload = (pr === '1');
                         if (wasPostSettingsReload) {
                             postSettingsReloadWhy = (localStorage.getItem('post_settings_reload_why') || '');
                             const why = encodeURIComponent(postSettingsReloadWhy);
-                            tokenUrl = '/realtime/token?post_settings_reload=1' + (why ? `&post_settings_reload_why=${why}` : '');
+                            tokenUrl += (tokenUrl.includes('?') ? '&' : '?') + 'post_settings_reload=1' + (why ? `&post_settings_reload_why=${why}` : '');
                         }
                     } catch (_) {}
                     const tok = await fetch(tokenUrl).then(r => r.json()).catch(() => null);
@@ -653,6 +726,26 @@
                         name: 'set_walk',
                         description: 'Switch the 3D avatar to walking animation',
                         parameters: { type: 'object', properties: {}, additionalProperties: false },
+                    },
+                    {
+                        type: 'function',
+                        name: 'update_code_assist_chat',
+                        description: 'Update the existing code assist panel by appending or replacing code/explanation, changing the title/problem, or adding next actions. Re-render the panel immediately.',
+                        parameters: {
+                            type: 'object',
+                            properties: {
+                                language: { type: 'string' },
+                                title: { type: 'string' },
+                                problem: { type: 'string' },
+                                code_append: { type: 'string' },
+                                code_replace: { type: 'string' },
+                                explanation_append: { type: 'string' },
+                                explanation_replace: { type: 'string' },
+                                add_next_actions: { type: 'array', items: { type: 'string' } },
+                                summary: { type: 'string', description: 'One-line summary of what changed for the chat log' }
+                            },
+                            additionalProperties: false
+                        }
                     },
                     // record_negation removed
                     
@@ -847,23 +940,137 @@
                 let responseRequested = false; // NEW: prevents double response.create
                 let lastFillerMs = 0; // debounce filler speech
                 let pendingRefreshNotice = false; // Ask user to refresh after settings change
+                // Quiz state
+                const quizState = { overlay: null, modal: null, eventId: null, quizId: null, questions: [], index: 0, answers: {} };
+
+                function ensureQuizUI() {
+                    if (!quizState.overlay) {
+                        const ov = document.createElement('div');
+                        ov.className = 'quiz-overlay';
+                        ov.innerHTML = `<div class="quiz-modal"><div class="quiz-header"><div class="quiz-title">Course Quiz</div><button class="quiz-close" aria-label="Close">✕</button></div><div class="quiz-body"></div></div>`;
+                        document.body.appendChild(ov);
+                        ov.querySelector('.quiz-close').addEventListener('click', ()=> { ov.classList.remove('open'); });
+                        quizState.overlay = ov; quizState.modal = ov.querySelector('.quiz-modal');
+                    }
+                    return quizState.overlay;
+                }
+
+                function renderQuizQuestion() {
+                    const body = quizState.overlay.querySelector('.quiz-body');
+                    body.innerHTML = '';
+                    const i = quizState.index;
+                    const q = quizState.questions[i];
+                    if (!q) return;
+                    const wrap = document.createElement('div');
+                    const nm = document.createElement('div'); nm.className = 'quiz-q'; nm.textContent = `Q${i+1}. ${q.question}`; wrap.appendChild(nm);
+                    const opts = Array.isArray(q.options) ? q.options : [];
+                    for (let k = 0; k < opts.length; k++) {
+                        const id = `q${q.id || i}_${k}`;
+                        const row = document.createElement('label');
+                        row.className = 'quiz-opt';
+                        const selected = quizState.answers[q.id]===k;
+                        row.innerHTML = `<input type=\"radio\" name=\"q_opt\" value=\"${k}\" id=\"${id}\" ${selected?'checked':''} /><span class=\"quiz-bullet\"></span><span class=\"quiz-text\">${opts[k]}</span>`;
+                        if (selected) row.classList.add('selected');
+                        wrap.appendChild(row);
+                        row.addEventListener('click', ()=> { const all = wrap.querySelectorAll('.quiz-opt'); all.forEach(el=>el.classList.remove('selected')); row.classList.add('selected'); });
+                    }
+                    const actions = document.createElement('div'); actions.className = 'quiz-actions';
+                    const prev = document.createElement('button'); prev.className = 'quiz-btn quiz-secondary'; prev.textContent = 'Back'; prev.disabled = (i===0);
+                    const next = document.createElement('button'); next.className = 'quiz-btn'; next.textContent = (i === quizState.questions.length -1) ? 'Submit' : 'Next';
+                    actions.appendChild(prev); actions.appendChild(next);
+                    wrap.appendChild(actions); body.appendChild(wrap);
+                    // Toggle next enabled state based on selection
+                    function updateNextState(){ const sel = body.querySelector('input[name="q_opt"]:checked'); next.disabled = !sel; next.style.opacity = sel ? '1' : '.6'; }
+                    body.addEventListener('change', (e)=>{ if (e.target && e.target.name === 'q_opt') updateNextState(); });
+                    // Also update when clicking the entire row (for label clicks)
+                    setTimeout(()=>{ wrap.querySelectorAll('.quiz-opt').forEach(el=> el.addEventListener('click', ()=> setTimeout(updateNextState, 0)) ); }, 0);
+                    updateNextState();
+                    prev.onclick = () => { const sel = body.querySelector('input[name="q_opt"]:checked'); if (sel) quizState.answers[q.id] = Number(sel.value); if (quizState.index>0) { quizState.index--; renderQuizQuestion(); } };
+                    next.onclick = async () => {
+                        const sel = body.querySelector('input[name="q_opt"]:checked'); if (sel) quizState.answers[q.id] = Number(sel.value);
+                        if (quizState.index < quizState.questions.length -1) { quizState.index++; renderQuizQuestion(); return; }
+                        // Submit
+                        try {
+                            const payload = { event_id: quizState.eventId, answers: quizState.answers };
+                            const resp = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'submit_event_quiz', arguments: payload }) }).then(r=>r.json());
+                            body.innerHTML = '';
+                            const res = document.createElement('div');
+                            res.innerHTML = `<div class="quiz-q">Your score: <span class="quiz-score">${resp.score || 0}%</span> (${resp.correct||0}/${resp.total||quizState.questions.length}) — ${resp.passed ? 'Passed 🎉' : 'Keep practicing!'} </div>`;
+                            const close = document.createElement('button'); close.className = 'quiz-btn'; close.textContent = 'Close'; close.onclick = ()=> quizState.overlay.classList.remove('open');
+                            body.appendChild(res); body.appendChild(close);
+                        } catch (_) { body.innerHTML = '<div class="quiz-q">Submission failed. Please try again.</div>'; }
+                    };
+                }
+
+                async function openQuizForEvent(eventId) {
+                    ensureQuizUI(); quizState.eventId = eventId; quizState.answers = {}; quizState.index = 0;
+                    // Close code-assist panel if open so the quiz doesn't overlap
+                    try { const cap = document.getElementById('codeAssistPanel'); if (cap) cap.classList.remove('open'); } catch(_) {}
+                    try {
+                        const qr = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_event_quiz', arguments:{ event_id: eventId } }) }).then(r=>r.json());
+                        if (!qr || !qr.ok) throw new Error('quiz_not_ready');
+                        quizState.questions = qr.questions || [];
+                        quizState.quizId = qr.quiz_id || null;
+                        quizState.overlay.classList.add('open');
+                        renderQuizQuestion();
+                    } catch (e) {
+                        console.warn('Quiz not available for event', eventId);
+                    }
+                }
+
+                // ------------------------------------------------------------
+                // Events list + Enter action (creates attendance in MySQL)
+                // ------------------------------------------------------------
+                async function loadEvents() {
+                    try {
+                        const r = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'list_courses', arguments:{} }) });
+                        const j = await r.json();
+                        if (!j || !j.ok) return;
+                        const list = document.getElementById('eventsList');
+                        if (!list) return;
+                        list.innerHTML = '';
+                        const items = (j.items || []).filter(it => it.status === 'upcoming' || it.status === 'today').slice(0, 12);
+                        for (const ev of items) {
+                            const card = document.createElement('div');
+                            card.className = 'course-card';
+                            const title = document.createElement('h3'); title.textContent = ev.title || `Event #${ev.id}`; card.appendChild(title);
+                            const meta = document.createElement('p'); meta.textContent = ev.start_local ? `Starts: ${ev.start_local}` : (ev.start_iso || ''); card.appendChild(meta);
+                            const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='8px';
+                            const enter = document.createElement('button'); enter.className='logout-btn'; enter.textContent = 'Enter Event';
+                            enter.onclick = async ()=> {
+                                enter.disabled = true; enter.textContent = 'Joining...';
+                                const sid = sessionStorage.getItem('chat_session_id');
+                                const resp = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'enter_event', arguments:{ event_id: ev.id, sessionId: sid } }) }).then(x=>x.json()).catch(()=>({ok:false}));
+                                if (resp && resp.ok) { enter.textContent = 'Joined'; enter.style.opacity='0.85';
+                                    quizBtn.disabled = false; quizBtn.style.opacity='1';
+                                } else { enter.disabled=false; enter.textContent='Enter Event'; }
+                            };
+                            const quizBtn = document.createElement('button'); quizBtn.className='logout-btn'; quizBtn.textContent='Start Quiz'; quizBtn.style.opacity='.6'; quizBtn.disabled = true;
+                            quizBtn.onclick = ()=> openQuizForEvent(ev.id);
+                            actions.appendChild(enter); actions.appendChild(quizBtn); card.appendChild(actions);
+                            list.appendChild(card);
+                        }
+                    } catch (_) {}
+                }
+                // Load events on page ready
+                try { loadEvents(); } catch (_) {}
 
                 function maybeSendFiller() {
                     try {
                         const nowMs = Date.now();
-                        if (isResponseActive || responseRequested) return;
-                        if (!greetingInProgress && (nowMs - lastFillerMs > 700)) {
-                            responseRequested = true;
-                            const lang = currentPreferredLanguage || 'English';
-                            dc.send(JSON.stringify({
-                                type: 'response.create',
-                                response: {
-                                    modalities: ['audio','text'],
-                                    instructions: `In ${lang}, speak a SINGLE ultra‑brief acknowledgement (0.4–1.0s) like “on it”, “checking now”, or “got it”—vary wording each time—then continue silently while you fetch. Keep it one short line.`
-                                }
-                            }));
-                            lastFillerMs = nowMs;
-                        }
+                        if (greetingInProgress) return;
+                        if (isResponseActive || responseRequested) return; // avoid overlapping response.create
+                        if (nowMs - lastFillerMs < 1200) return; // debounce
+                        responseRequested = true;
+                        const lang = currentPreferredLanguage || 'English';
+                        dc.send(JSON.stringify({
+                            type: 'response.create',
+                            response: {
+                                modalities: ['audio','text'],
+                                instructions: `In ${lang}, speak ONE ultra‑brief acknowledgement (≤1s)—e.g., “on it” or “working on it”—then continue silently while the task runs.`
+                            }
+                        }));
+                        lastFillerMs = nowMs;
                     } catch (_) {}
                 }
 
@@ -909,6 +1116,117 @@
                         sessionUpdateWaiters.push(() => { try { clearTimeout(timer); } catch (_) {} resolve(true); });
                     });
                 }
+
+                function ensureCodeAssistLauncher() {
+                    let btn = document.getElementById('codeAssistLauncher');
+                    if (!btn) {
+                        btn = document.createElement('button');
+                        btn.id = 'codeAssistLauncher';
+                        btn.className = 'code-assist-launcher';
+                        btn.title = 'Open Code Assist';
+                        btn.textContent = '</>';
+                        btn.addEventListener('click', () => {
+                            try {
+                                const raw = sessionStorage.getItem('code_assist_blocks') || sessionStorage.getItem('code_assist_last');
+                                if (!raw) return; const payload = JSON.parse(raw);
+                                openOrRenderCodeAssist(Array.isArray(payload) ? payload : [payload]);
+                            } catch (_) {}
+                        });
+                        document.body.appendChild(btn);
+                    }
+                    return btn;
+                }
+
+                function openOrRenderCodeAssist(payload) {
+                    // If a quiz is active, do not open the code panel
+                    try { if (quizState && quizState.overlay && quizState.overlay.classList.contains('open')) return; } catch(_) {}
+                    // Accept array of blocks or single block
+                    const blocks = Array.isArray(payload) ? payload : (payload ? [payload] : []);
+                    function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+                    function ensurePanel() {
+                        let el = document.getElementById('codeAssistPanel');
+                        if (!el) {
+                            el = document.createElement('div');
+                            el.id = 'codeAssistPanel';
+                            el.className = 'code-assist-panel';
+                            el.innerHTML = `<div class="cap-header"><div class="cap-title">Coding Assistant</div><button class="cap-close" aria-label="Close">✕</button></div><div class="cap-body"></div>`;
+                            document.body.appendChild(el);
+                            el.querySelector('.cap-close').addEventListener('click', ()=> { el.classList.remove('open'); const l = document.getElementById('codeAssistLauncher'); if (l) l.style.display='grid'; });
+                        }
+                        return el;
+                    }
+                    const panel = ensurePanel();
+                    const body = panel.querySelector('.cap-body');
+                    body.innerHTML = '';
+                    const makeSection = (blk) => {
+                        const { language, title, problem, code, explanation, next_actions } = blk || {};
+                        const langLabel = (language || 'text');
+                        const prismLang = (() => {
+                            const l = String(langLabel).toLowerCase();
+                            if (l === 'html' || l === 'xml' || l === 'svg' || l === 'markup') return 'markup';
+                            if (l === 'js' || l === 'javascript') return 'javascript';
+                            if (l === 'ts' || l === 'typescript') return 'typescript';
+                            if (l === 'py' || l === 'python') return 'python';
+                            if (l === 'java') return 'java';
+                            if (l === 'csharp' || l === 'cs') return 'csharp';
+                            if (l === 'go') return 'go';
+                            if (l === 'rust') return 'rust';
+                            if (l === 'php') return 'php';
+                            if (l === 'ruby' || l === 'rb') return 'ruby';
+                            if (l === 'sql') return 'sql';
+                            if (l === 'md' || l === 'markdown') return 'markdown';
+                            return 'clike';
+                        })();
+                        const section = document.createElement('div');
+                        section.className = 'cap-section';
+                        section.innerHTML = `
+                            <div class="cap-kv">Language</div>
+                            <div style="margin-bottom:8px; font-weight:700;">${escapeHtml(String(langLabel).charAt(0).toUpperCase() + String(langLabel).slice(1))}</div>
+                            ${title ? `<div class=\"cap-kv\">Topic</div><div style=\"margin-bottom:8px\">${escapeHtml(title)}</div>` : ''}
+                            ${problem ? `<div class=\"cap-kv\">Problem</div><div style=\"margin-bottom:8px\">${escapeHtml(problem)}</div>` : ''}
+                            ${code ? `<div class=\"cap-kv\">Code</div><pre class=\"cap-pre\" data-lang=\"${escapeHtml(langLabel)}\"><button class=\"cap-copy\" aria-label=\"Copy code\" title=\"Copy\">⧉</button><code class=\"language-${prismLang}\">${escapeHtml(code)}</code></pre>` : ''}
+                            ${explanation ? `<div class=\"cap-kv\" style=\"margin-top:10px;\">Explanation</div><div>${escapeHtml(explanation)}</div>` : ''}
+                            ${Array.isArray(next_actions) && next_actions.length ? `<div class=\"cap-kv\" style=\"margin-top:10px;\">Try next</div><ul class=\"cap-list\">${next_actions.map(a=>`<li>${escapeHtml(a)}`).join('')}</ul>` : ''}
+                        `;
+                        // Bind copy behavior
+                        const pre = section.querySelector('.cap-pre');
+                        if (pre) {
+                            const copyBtn = pre.querySelector('.cap-copy');
+                            if (copyBtn) copyBtn.addEventListener('click', async () => {
+                                const codeText = (pre.querySelector('code')?.textContent) || '';
+                                try { await navigator.clipboard.writeText(codeText); } catch (_) {
+                                    const ta = document.createElement('textarea'); ta.value = codeText; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+                                }
+                                let badge = pre.querySelector('.cap-copied');
+                                if (!badge) { badge = document.createElement('div'); badge.className = 'cap-copied'; badge.textContent = 'Copied!'; pre.appendChild(badge); }
+                                setTimeout(()=> { if (badge && badge.parentNode) badge.parentNode.removeChild(badge); }, 1200);
+                            });
+                            // Highlight this code block if Prism is available
+                            try {
+                                const codeEl = pre.querySelector('code');
+                                if (window.Prism && codeEl) { window.Prism.highlightElement(codeEl); }
+                            } catch(_) {}
+                        }
+                        return section;
+                    };
+
+                    for (const blk of blocks) {
+                        body.appendChild(makeSection(blk));
+                    }
+                    const firstTitle = blocks.length && blocks[0].title ? blocks[0].title : 'Coding Assistant';
+                    panel.querySelector('.cap-title').textContent = firstTitle;
+                    panel.classList.add('open');
+                    const launcher = ensureCodeAssistLauncher(); launcher.style.display='none';
+                    try {
+                        const escHandler = (e) => { if (e.key === 'Escape') { panel.classList.remove('open'); launcher.style.display='grid'; } };
+                        window.removeEventListener('keydown', escHandler); window.addEventListener('keydown', escHandler);
+                    } catch(_) {}
+                    // Auto-scroll to newest content
+                    try { body.scrollTop = body.scrollHeight; } catch(_) {}
+                }
+
+                // On load: if we have a saved panel, show the launcher for reopening
+                try { if (sessionStorage.getItem('code_assist_blocks') || sessionStorage.getItem('code_assist_last')) ensureCodeAssistLauncher().style.display='grid'; } catch(_) {}
 
                 const toolHandler = async (evt) => {
                     try {
@@ -1047,6 +1365,34 @@
                                 return;
                             }
 
+                            if (name === 'get_event_quiz') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
+                                try {
+                                    maybeSendFiller();
+                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_event_quiz', arguments:{ event_id: Number(args.event_id) } }) }).then(r=>r.json());
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    if (out && out.ok && args.event_id) {
+                                        quizState.questions = out.questions || [];
+                                        quizState.quizId = out.quiz_id || null;
+                                        ensureQuizUI(); quizState.eventId = Number(args.event_id);
+                                        quizState.index = 0; quizState.answers = {};
+                                        // Close code panel to avoid overlap
+                                        try { const cap = document.getElementById('codeAssistPanel'); if (cap) cap.classList.remove('open'); } catch(_) {}
+                                        quizState.overlay.classList.add('open');
+                                        renderQuizQuestion();
+                                        // Send a text-only acknowledgement so the assistant does NOT read the questions out loud
+                                        dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['text'], instructions: 'I opened a short quiz in the center of your screen. Select an answer and press Next; submit when done.' } }));
+                                        // Do not immediately request another spoken response
+                                        return;
+                                    }
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'quiz_fetch_failed' }) } }));
+                                }
+                                // Avoid follow-up speech for quiz fetch
+                                return;
+                            }
+
                             if (name === 'open_code_assist_chat') {
                                 let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
                                 let args = {};
@@ -1078,38 +1424,19 @@
                                           </div>
                                           <div class="cap-body"></div>`;
                                         document.body.appendChild(el);
-                                        el.querySelector('.cap-close').addEventListener('click', ()=> el.classList.remove('open'));
+                                        el.querySelector('.cap-close').addEventListener('click', ()=> { el.classList.remove('open'); try { const l = document.getElementById('codeAssistLauncher'); if (l) l.style.display='grid'; } catch(_) {} });
                                     }
                                     return el;
                                 }
-                const panel = ensurePanel();
-                const body = panel.querySelector('.cap-body');
-                const langLabel = language.charAt(0).toUpperCase() + language.slice(1);
-                body.innerHTML = '';
-                                const section = document.createElement('div');
-                                section.className = 'cap-section';
-                                section.innerHTML = `
-                                  <div class="cap-kv">Language</div>
-                                  <div style="margin-bottom:8px; font-weight:600;">${escapeHtml(langLabel)}</div>
-                                  <div class="cap-kv">Topic</div>
-                                  <div style="margin-bottom:8px">${escapeHtml(title)}</div>
-                                  ${problem ? `<div class=\"cap-kv\">Problem</div><div style=\"margin-bottom:8px\">${escapeHtml(problem)}</div>` : ''}
-                                  <div class="cap-kv">Code</div>
-                                  <pre class="cap-pre" data-lang="${escapeHtml(language)}"><code>${escapeHtml(code)}</code></pre>
-                                  <div class="cap-kv" style="margin-top:10px;">Explanation</div>
-                                  <div>${escapeHtml(explanation)}</div>
-                                  ${nextActions && nextActions.length ? `<div class=\"cap-kv\" style=\"margin-top:10px;\">Try next</div><ul class=\"cap-list\">${nextActions.map(a=>`<li>${escapeHtml(a)}</li>`).join('')}</ul>` : ''}
-                                `;
-                                body.appendChild(section);
-                panel.querySelector('.cap-title').textContent = title || 'Coding Assistant';
-                panel.classList.add('open');
-
-                // ESC to close
-                try {
-                    const escHandler = (e) => { if (e.key === 'Escape') panel.classList.remove('open'); };
-                    window.removeEventListener('keydown', escHandler);
-                    window.addEventListener('keydown', escHandler);
-                } catch(_) {}
+                                // Append a new block and render all sections from session state
+                                try {
+                                    const newBlock = { language, title, problem, code, explanation, next_actions: nextActions };
+                                    const arr = JSON.parse(sessionStorage.getItem('code_assist_blocks') || '[]');
+                                    arr.push(newBlock);
+                                    sessionStorage.setItem('code_assist_blocks', JSON.stringify(arr));
+                                    sessionStorage.setItem('code_assist_last', JSON.stringify(newBlock));
+                                    openOrRenderCodeAssist(arr);
+                                } catch(_) {}
 
                                 // Tell the model the panel is open AND give a concise content preview so it can refer to it on request
                                 const codePreview = code.split('\n').slice(0,12).join('\n').slice(0,600);
@@ -1125,6 +1452,49 @@
                                     await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'add_chat_turn', arguments:{ sessionId: sid, role:'assistant', content: summary } }) });
                                 } catch (_) {}
 
+                                if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
+                                return;
+                            }
+
+                            if (name === 'update_code_assist_chat') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {};
+                                try {
+                                    if (argStr && typeof argStr === 'string') args = JSON.parse(argStr);
+                                    else if (msg && (msg.arguments != null)) args = (typeof msg.arguments === 'string') ? JSON.parse(msg.arguments) : msg.arguments;
+                                } catch (_) { args = {}; }
+                                try {
+                                    // Merge with existing blocks; default to last block unless block_index provided
+                                    const arr = JSON.parse(sessionStorage.getItem('code_assist_blocks') || '[]');
+                                    const idx = (typeof args.block_index === 'number' && args.block_index >= 0 && args.block_index < arr.length) ? args.block_index : (arr.length - 1);
+                                    const prev = arr[idx] || {};
+                                    const updated = Object.assign({}, prev);
+                                    if (args.language) updated.language = String(args.language);
+                                    if (args.title) updated.title = String(args.title);
+                                    if (args.problem) updated.problem = String(args.problem);
+                                    if (typeof args.code_replace === 'string') updated.code = String(args.code_replace);
+                                    if (typeof args.code_append === 'string') updated.code = (updated.code || '') + (updated.code ? '\n' : '') + String(args.code_append);
+                                    if (typeof args.explanation_replace === 'string') updated.explanation = String(args.explanation_replace);
+                                    if (typeof args.explanation_append === 'string') updated.explanation = (updated.explanation || '') + (updated.explanation ? '\n\n' : '') + String(args.explanation_append);
+                                    if (Array.isArray(args.add_next_actions) && args.add_next_actions.length) {
+                                        const base = Array.isArray(updated.next_actions) ? updated.next_actions.slice() : [];
+                                        for (const a of args.add_next_actions) { if (a && !base.includes(a)) base.push(a); }
+                                        updated.next_actions = base;
+                                    }
+                                    if (idx >= 0) { arr[idx] = updated; } else { arr.push(updated); }
+                                    sessionStorage.setItem('code_assist_blocks', JSON.stringify(arr));
+                                    sessionStorage.setItem('code_assist_last', JSON.stringify(updated));
+                                    openOrRenderCodeAssist(arr);
+                                    // Send a small echo back and log a short assistant turn
+                                    const summary = String(args.summary || 'Updated code assist panel');
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:true, updated:true }) } }));
+                                    try {
+                                        const uid = await getUserId(); let sid = getSessionId(); if (!sid) sid = await startNewSessionForUser(uid);
+                                        await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'add_chat_turn', arguments:{ sessionId: sid, role:'assistant', content: summary } }) });
+                                    } catch (_) {}
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'panel_update_failed' }) } }));
+                                }
                                 if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
                                 return;
                             }
@@ -1336,18 +1706,49 @@
                 async function fetchUserContextForGreeting() {
                     try {
                         const userId = await getUserId();
-                        // Fetch preferred language only (no prior-summary continuity)
+                        // Preferred language
                         const lang = await fetch('/tools/execute', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ name: 'read_preferred_language', arguments: { userId } })
                         }).then(r => r.json()).catch(() => ({}));
                         const preferredLanguage = (lang && lang.language) || null;
-                        const userName = null;
+                        // Display name from profile (if available)
+                        let userName = null;
+                        try {
+                            const prof = await fetch('/user/profile').then(r => r.json());
+                            userName = prof && prof.profile && prof.profile.name ? String(prof.profile.name) : null;
+                        } catch (_) {}
                         return { preferredLanguage, userName };
                     } catch (_) {
                         return { preferredLanguage: null, userName: null };
                     }
+                }
+
+                // Fetch most recent user's message to use as a hard anchor for the first reply
+                async function fetchLastUserAnchor() {
+                    try {
+                        const resp = await fetch('/tools/execute', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: 'fetch_chat_history', arguments: { sessions: 1 } })
+                        }).then(r => r.json()).catch(()=>null);
+                        if (!resp || !resp.sessions || !resp.sessions.length) return null;
+                        const s = resp.sessions[0];
+                        let arr = [];
+                        try { arr = Array.isArray(s.content) ? s.content : JSON.parse(s.content || '[]'); } catch(_) { arr = []; }
+                        if (!Array.isArray(arr) || !arr.length) return null;
+                        for (let i = arr.length - 1; i >= 0; i--) {
+                            const m = arr[i];
+                            const role = (m && m.role) ? String(m.role).toLowerCase() : '';
+                            if (role === 'user' || role === '' || role === 'human') {
+                                const text = (m && m.text != null) ? String(m.text) : String(m?.content || '');
+                                if (text && text.trim()) {
+                                    const when = (m && m.at_local) ? String(m.at_local) : null;
+                                    return { text: text.trim(), whenLocal: when };
+                                }
+                            }
+                        }
+                        return null;
+                    } catch (_) { return null; }
                 }
 
                 (async () => {
@@ -1357,6 +1758,8 @@
                     await startNewSessionForUser(uid);
                     // STEP 1: retrieve user context first
                     const ctx = await fetchUserContextForGreeting();
+                    // STEP 1b: fetch most recent user anchor (last user line)
+                    const anchor = await fetchLastUserAnchor();
                     // STEP 2: if the user is brand-new (no history), auto-introduce; else wait for user
                     const parts = [];
                     if (ctx.preferredLanguage) {
@@ -1367,15 +1770,14 @@
                         currentPreferredLanguage = 'English';
                     }
                     // The server has already provided digest/memory in instructions. Use exactly one relevant detail if helpful.
-                    if (ctx.userName) {
-                        parts.push(`Greet the user by name: ${ctx.userName}.`);
-                    } else {
-                        parts.push('If you do not know the name, ask their name in one short sentence.');
-                    }
+                    const greetLine = ctx.userName
+                        ? `Start with a brief, natural greeting using the learner’s name: ${ctx.userName}.`
+                        : 'Start with a brief, natural greeting; if you do not know the name, you may ask it in one short sentence.';
+                    parts.push(greetLine);
                     if (wasPostSettingsReload) {
                         const why = (postSettingsReloadWhy || '').toLowerCase();
                         const what = (why === 'both') ? 'voice and style' : (why === 'style' ? 'style' : 'voice');
-                        parts.push(`POST-REFRESH CHECK: Start with a single, natural line asking if the new ${what} sounds right on their side (no re-introduction), then continue from the most recent context.`);
+                        parts.push(`POST-REFRESH CHECK: After a brief greeting, add one natural line asking if the new ${what} sounds right on their side (no re-introduction), then continue from the most recent context.`);
                         initialGreetingSent = true;
                         responseRequested = true;
                         dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: parts.join(' ') } }));
@@ -1388,26 +1790,38 @@
                             response: { modalities: ['audio','text'], instructions: parts.join(' ') }
                         }));
                     } else {
-                        // Returning user: send a continuation intro that uses the server-provided memory/excerpts
-                        parts.push('CONTINUATION INTRO: Skim the newest session summary and recent conversation excerpts included in your system instructions. You must warmly greet the user as your friend with entusiastic voice and energy and ask them how they are or whats going on, everytime be different in how you greet the user, be unique because the users wants you to be unique and exciting and energetic etc. Continue naturally from there without restating the memory. Reference at most one specific detail, then propose a next small step or ask one focused question. Keep it varied and concise (2–3 short sentences). Do not switch languages mid-turn.');
-                        // Apply personalized voice if stored
-                        try {
-                            const uid = await getUserId();
-                            const s = await fetch('/tools/execute', {
-                                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ name: 'read_agent_settings', arguments: { userId: uid } })
-                            }).then(r => r.json());
-                            if (s && s.voice && typeof s.voice === 'string') {
-                                const v = s.voice.toLowerCase() === 'alloy' ? 'alloy' : (s.voice.toLowerCase() === 'cedar' ? 'cedar' : null);
-                                if (v) dc.send(JSON.stringify({ type: 'session.update', session: { voice: v } }));
-                            }
-                        } catch (_) {}
-                        initialGreetingSent = true;
-                        responseRequested = true;
-                        dc.send(JSON.stringify({
-                            type: 'response.create',
-                            response: { modalities: ['audio','text'], instructions: parts.join(' ') }
-                        }));
+                        // Returning user: strictly continue from the most recent excerpt; no generic re-introductions
+                        if (anchor && anchor.text) {
+                            parts.push('CONTINUATION INTRO: Begin with a brief, natural greeting (use the name if provided). In 2–3 short sentences: (1) optionally acknowledge timing (e.g., “you’re back fast”), and (2) continue directly from the user’s last message by referencing exactly ONE concrete detail. Do NOT invent topics, and do NOT mention personal routines/fitness unless present in the excerpt. Ask ONE focused question to move forward.');
+                            const tag = anchor.whenLocal ? ` [${anchor.whenLocal}]` : '';
+                            parts.push(`Continuation anchor (MANDATORY): Last user message${tag}: "${anchor.text}". Your first line MUST respond to THIS content; ignore any conflicting memory. Keep it concise.`);
+                            // Apply personalized voice if stored
+                            try {
+                                const uid = await getUserId();
+                                const s = await fetch('/tools/execute', {
+                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ name: 'read_agent_settings', arguments: { userId: uid } })
+                                }).then(r => r.json());
+                                if (s && s.voice && typeof s.voice === 'string') {
+                                    const v = s.voice.toLowerCase() === 'alloy' ? 'alloy' : (s.voice.toLowerCase() === 'cedar' ? 'cedar' : null);
+                                    if (v) dc.send(JSON.stringify({ type: 'session.update', session: { voice: v } }));
+                                }
+                            } catch (_) {}
+                            initialGreetingSent = true;
+                            responseRequested = true;
+                            await new Promise(r => setTimeout(r, 180));
+                            dc.send(JSON.stringify({
+                                type: 'response.create',
+                                response: { modalities: ['audio','text'], instructions: parts.join(' ') }
+                            }));
+                        } else {
+                            // No reliable anchor: speak a neutral, assumption-free opener and ask ONE clarifying question.
+                            parts.push('SAFE CONTINUATION INTRO (NO ASSUMPTIONS): In 1–2 short sentences, greet warmly without referencing any prior topic, then ask a single clarifying question like “Want to pick up where we left off or start fresh?” Do NOT invent topics.');
+                            initialGreetingSent = true;
+                            responseRequested = true;
+                            await new Promise(r => setTimeout(r, 120));
+                            dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: parts.join(' ') } }));
+                        }
                     }
                     greetingInProgress = false;
                     // Small settle delay to avoid back-to-back response.create
