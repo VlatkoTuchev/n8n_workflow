@@ -54,6 +54,14 @@
             cursor: pointer;
         }
         .logout-btn:hover { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59,130,246,.18); }
+        .mute-btn { position: relative; }
+        /* On (default): green tint */
+        .mute-btn:not([data-muted="true"]) { border-color: rgba(16,185,129,.45); background: rgba(16,185,129,.12); color: #d1fae5; }
+        /* Off: red tint */
+        .mute-btn[data-muted="true"] { border-color: rgba(244,67,54,.55); background: rgba(244,67,54,.15); color: #ffcdc8; }
+        /* Small status dot */
+        .mute-ind { width: 9px; height: 9px; border-radius: 9999px; position: absolute; top: 4px; right: 4px; background: #4ade80; box-shadow: 0 0 0 2px rgba(0,0,0,0.35); }
+        .mute-btn[data-muted="true"] .mute-ind { background: #ef4444; }
 
         .main-content { max-width: 1200px; margin: 28px auto; padding: 0 20px; }
 
@@ -182,6 +190,16 @@
         .quiz-btn:disabled { opacity: .6; cursor: not-allowed; box-shadow: none; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: rgba(230,237,243,0.7); }
         .quiz-secondary { background: rgba(255,255,255,0.1); color: var(--text); border: 1px solid rgba(255,255,255,0.16); }
         .quiz-score { font-weight: 800; }
+        /* Summary overlay (mirrors quiz modal styling) */
+        .summary-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(6,10,18,0.65); backdrop-filter: blur(6px); z-index: 2100; }
+        .summary-overlay.open { display: flex; }
+        .summary-modal { width: min(860px, 94vw); max-height: 88vh; overflow: hidden; border-radius: 18px; background: rgba(15,22,35,0.96); border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 40px 90px rgba(0,0,0,0.65); color: var(--text); transform: translateY(6px); animation: quizIn 260ms ease forwards; }
+        .summary-header { position: relative; display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; background: linear-gradient(180deg, rgba(22,30,48,1), rgba(22,30,48,.92)); border-bottom: 1px solid rgba(255,255,255,0.12); border-top-left-radius: 18px; border-top-right-radius: 18px; }
+        .summary-title { font-weight: 900; font-size: 18px; letter-spacing: .2px; display: flex; gap: 10px; align-items: center; }
+        .summary-close { position: absolute; top: 50%; transform: translateY(-54%); right: 12px; width: 30px; height: 30px; padding: 0; border-radius: 9999px; border: 1px solid rgba(255,255,255,0.22); background: rgba(255,255,255,0.12); color: #e6edf3; font-weight: 900; cursor: pointer; display: inline-grid; place-items: center; line-height: 1; font-size: 16px; text-align: center; }
+        .summary-close:hover { background: rgba(255,255,255,0.2); }
+        .summary-body { padding: 18px; overflow: auto; max-height: calc(88vh - 64px); }
+        .summary-body section { max-width: 760px; margin: auto; line-height: 1.55; }
         /* Themed code backgrounds per language (approximate) */
         .cap-pre[data-lang="python"] { background: linear-gradient(180deg, rgba(53,114,165,0.22), rgba(9,16,32,0.8)); }
         .cap-pre[data-lang="javascript"], .cap-pre[data-lang="js"] { background: linear-gradient(180deg, rgba(247,223,30,0.16), rgba(9,16,32,0.8)); }
@@ -241,6 +259,7 @@
             <p>Your AI-powered learning companion for discovering the perfect courses</p>
         </div>
         <div class="actions">
+            <button class="logout-btn mute-btn" id="muteBtn" aria-pressed="false" title="Toggle microphone" data-muted="false"><span class="mute-label">🎙️ Mic On</span><span class="mute-ind"></span></button>
             <button class="logout-btn" id="logoutBtn">Log out</button>
         </div>
     </div>
@@ -590,6 +609,8 @@
                         { urls: 'stun:stun.l.google.com:19302' }
                     ]
                 });
+                // Expose for mic toggle fallbacks
+                window.__PC = pc;
                 pc.addTransceiver('audio', { direction: 'sendrecv' });
 
                 // Use the dedicated <audio id="remoteAudio"> for playback
@@ -598,15 +619,16 @@
                 })();
                 let remoteAudioAttached = false;
                 const ensurePlayback = async () => {
-                    try { await remoteAudioEl.play(); } catch (err) {
-                        console.warn('Autoplay blocked, requesting user gesture to start audio');
-                        const prompt = document.createElement('div');
-                        prompt.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;';
-                    const btn = document.createElement('button');
-                        btn.textContent = 'Enable Audio';
-                        btn.style.cssText = 'padding:14px 22px;border-radius:10px;border:none;background:#4caf50;color:#fff;font-size:16px;cursor:pointer;';
-                        btn.onclick = async () => { try { await remoteAudioEl.play(); } finally { prompt.remove(); } };
-                        prompt.appendChild(btn); document.body.appendChild(prompt);
+                    try { await remoteAudioEl.play(); }
+                    catch (err) {
+                        // No blocking UI; start playback on first user gesture instead
+                        const onAnyUserGesture = async () => {
+                            try { await remoteAudioEl.play(); } catch(_) {}
+                            window.removeEventListener('pointerdown', onAnyUserGesture);
+                            window.removeEventListener('keydown', onAnyUserGesture);
+                        };
+                        window.addEventListener('pointerdown', onAnyUserGesture, { once: true });
+                        window.addEventListener('keydown', onAnyUserGesture, { once: true });
                     }
                 };
 
@@ -704,16 +726,25 @@
                 dc.onclose = () => console.log('DataChannel closed');
 
                 // Mic
+                // Microphone capture + toggle wiring
                 try {
                     const mic = await navigator.mediaDevices.getUserMedia({
                         audio: { echoCancellation: true, noiseSuppression: true },
                         video: false
                     });
-                    for (const track of mic.getAudioTracks()) {
-                        pc.addTrack(track, mic);
-                    }
+                    window.__MIC_STREAM = mic;
+                    window.__MIC_TRACKS = mic.getAudioTracks();
+                    for (const track of window.__MIC_TRACKS) { pc.addTrack(track, mic); }
+                    // Enable mute button now that mic is available
+                    try { const mb = document.getElementById('muteBtn'); if (mb) { mb.disabled = false; } } catch(_) {}
+                    // Apply desired mute state if it was toggled before stream was ready
+                    try {
+                        const wantMuted = !!window.__DESIRED_MIC_MUTED;
+                        for (const t of window.__MIC_TRACKS) { try { t.enabled = !wantMuted; } catch(_){} }
+                    } catch(_) {}
                 } catch (e) {
                     console.warn('Microphone permission error:', e);
+                    try { const mb = document.getElementById('muteBtn'); if (mb) { mb.disabled = true; mb.title = 'Microphone unavailable'; } } catch(_) {}
                 }
 
                 // Fetch ephemeral session token so the model receives memory/context in instructions
@@ -1107,6 +1138,48 @@
                 }
 
                 // ------------------------------------------------------------
+                // Summary overlay (HTML content from DB)
+                // ------------------------------------------------------------
+                const summaryState = { overlay: null, modal: null, body: null, title: null };
+                function ensureSummaryUI(){
+                    if (!summaryState.overlay) {
+                        const ov = document.createElement('div');
+                        ov.id = 'summaryOverlay';
+                        ov.className = 'summary-overlay';
+                        ov.innerHTML = `<div class="summary-modal"><div class="summary-header"><div class="summary-title">Course Summary</div><button class="summary-close" aria-label="Close">✕</button></div><div class="summary-body"></div></div>`;
+                        document.body.appendChild(ov);
+                        ov.querySelector('.summary-close').addEventListener('click', ()=> ov.classList.remove('open'));
+                        summaryState.overlay = ov;
+                        summaryState.modal = ov.querySelector('.summary-modal');
+                        summaryState.body = ov.querySelector('.summary-body');
+                        summaryState.title = ov.querySelector('.summary-title');
+                        const escHandler = (e)=>{ if (e.key === 'Escape') ov.classList.remove('open'); };
+                        window.addEventListener('keydown', escHandler);
+                    }
+                    return summaryState.overlay;
+                }
+                function openSummaryHtml(html, title){
+                    ensureSummaryUI();
+                    try { summaryState.title.textContent = title ? `Course Summary — ${title}` : 'Course Summary'; } catch(_) {}
+                    try { summaryState.body.innerHTML = html && html.trim() ? html : '<div class="quiz-q">No summary available.</div>'; } catch(_) { summaryState.body.textContent = 'No summary available.'; }
+                    summaryState.overlay.classList.add('open');
+                }
+                async function openSummaryForEvent(eventId, eventTitle){
+                    try {
+                        const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_event_summary', arguments:{ event_id: Number(eventId) } }) }).then(r=>r.json());
+                        if (out && out.ok && out.found) {
+                            openSummaryHtml(out.summary_html || '', out.event_title || eventTitle || '');
+                            try { dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: `I opened the summary for “${out.event_title || eventTitle || 'the course'}”.` } })); } catch(_) {}
+                        } else {
+                            openSummaryHtml('<div class="quiz-q">No summary found for this course.</div>', eventTitle || '');
+                            try { dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: 'I couldn\'t find a saved summary for that course yet.' } })); } catch(_) {}
+                        }
+                    } catch(_) {
+                        openSummaryHtml('<div class="quiz-q">Failed to load summary.</div>', eventTitle || '');
+                    }
+                }
+
+                // ------------------------------------------------------------
                 // Events list + Enter action (creates attendance in MySQL)
                 // ------------------------------------------------------------
                 async function loadEvents() {
@@ -1117,7 +1190,18 @@
                         const list = document.getElementById('eventsList');
                         if (!list) return;
                         list.innerHTML = '';
-                        const items = (j.items || []).filter(it => it.status === 'upcoming' || it.status === 'today').slice(0, 12);
+                        // Show top items per server sort (upcoming → today → past). Always include Prompt Engineering if present.
+                        let items = (j.items || []).slice(0, 12);
+                        try {
+                            const hasPrompt = items.some(x => String(x.title || '').toLowerCase().includes('prompt'));
+                            if (!hasPrompt) {
+                                const extra = (j.items || []).find(x => String(x.title || '').toLowerCase().includes('prompt'));
+                                if (extra) {
+                                    const seen = new Set(items.map(x => x.id));
+                                    if (!seen.has(extra.id)) items.push(extra);
+                                }
+                            }
+                        } catch(_) {}
                         for (const ev of items) {
                             const card = document.createElement('div');
                             card.className = 'course-card';
@@ -1135,7 +1219,14 @@
                             };
                             const quizBtn = document.createElement('button'); quizBtn.className='logout-btn'; quizBtn.textContent='Start Quiz'; quizBtn.style.opacity='.6'; quizBtn.disabled = true;
                             quizBtn.onclick = ()=> openQuizForEvent(ev.id);
-                            actions.appendChild(enter); actions.appendChild(quizBtn); card.appendChild(actions);
+                            const sumBtn = document.createElement('button'); sumBtn.className='logout-btn'; sumBtn.textContent='View Summary';
+                            sumBtn.onclick = async () => {
+                                sumBtn.disabled = true; const old = sumBtn.textContent; sumBtn.textContent = 'Loading...';
+                                try {
+                                    await openSummaryForEvent(ev.id, ev.title);
+                                } finally { sumBtn.disabled = false; sumBtn.textContent = old; }
+                            };
+                            actions.appendChild(enter); actions.appendChild(quizBtn); actions.appendChild(sumBtn); card.appendChild(actions);
                             list.appendChild(card);
                         }
                     } catch (_) {}
@@ -1480,6 +1571,30 @@
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'quiz_fetch_failed' }) } }));
                                 }
                                 // Avoid follow-up speech for quiz fetch
+                                return;
+                            }
+
+                            if (name === 'get_event_summary') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
+                                try {
+                                    maybeSendFiller();
+                                    const payload = {};
+                                    if (args.event_id != null) payload.event_id = Number(args.event_id);
+                                    if (args.title != null) payload.title = String(args.title);
+                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_event_summary', arguments: payload }) }).then(r=>r.json());
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    if (out && out.ok && out.found) {
+                                        ensureSummaryUI();
+                                        openSummaryHtml(out.summary_html || '', out.event_title || '');
+                                        dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: `I opened the summary for “${out.event_title || 'the course'}”.` } }));
+                                        return;
+                                    }
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'summary_fetch_failed' }) } }));
+                                }
+                                // Avoid extra follow-up speech
+                                dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: 'I couldn\'t find a saved summary for that course yet.' } }));
                                 return;
                             }
 
@@ -1949,6 +2064,34 @@
                     location.href = '/login';
                 });
             }
+            // Mute/unmute toggle
+            (function setupMuteToggle(){
+                const mb = document.getElementById('muteBtn');
+                if (!mb) return;
+                mb.disabled = true; // enable after mic ready
+                function updateLabel(mut){
+                    mb.setAttribute('data-muted', mut ? 'true' : 'false');
+                    mb.setAttribute('aria-pressed', mut ? 'true' : 'false');
+                    const lbl = mb.querySelector('.mute-label');
+                    if (lbl) lbl.textContent = mut ? '🔇 Mic Off' : '🎙️ Mic On';
+                }
+                updateLabel(false);
+                mb.addEventListener('click', () => {
+                    try {
+                        const pc = window.__PC;
+                        const tracks = (window.__MIC_TRACKS || []);
+                        const currentlyMuted = mb.getAttribute('data-muted') === 'true';
+                        const nextMuted = !currentlyMuted;
+                        // Apply to local tracks now
+                        for (const t of tracks) { try { t.enabled = !nextMuted; } catch(_){} }
+                        // Apply to any sender track if present
+                        try { if (pc && pc.getSenders) { pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'audio') s.track.enabled = !nextMuted; }); } } catch(_){ }
+                        // Persist desired mute state for late mic init
+                        window.__DESIRED_MIC_MUTED = nextMuted;
+                        updateLabel(nextMuted);
+                    } catch(_) { /* noop */ }
+                });
+            })();
             // Background session summary on page exit
             let finalizationInProgress = false;
             let finalizationCompleted = false;

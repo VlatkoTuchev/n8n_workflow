@@ -516,6 +516,7 @@ First turn policy:
       - For a new topic/segment (e.g., “now show classes”), call open_code_assist_chat again to APPEND a new block below the previous one so the user can scroll through a growing lesson.
       - Use update_code_assist_chat to refine the existing panel dynamically (append/replace code or explanation, add steps). By default it edits the latest block; pass block_index to target an earlier block. Keep spoken output brief while the panel updates visually.
       - For event follow‑ups: If the learner attended a course recently, offer a short quiz. Use get_event_quiz to fetch existing MCQs and submit_event_quiz to grade and persist results. Keep spoken guidance brief and encouraging. If no quiz is found, say so and offer a summary or practice instead.
+      - When the learner asks for a course summary (attended or not), call get_event_summary with an event_id or a title. If a summary exists, keep spoken output to one short line and rely on the on‑screen summary panel for details.
       - Do NOT use the code assist panel for quizzes. Quizzes must appear in the dedicated quiz modal only.
    - Prefer memory/digest first; use tools after the greeting and only between turns
 
@@ -1242,7 +1243,7 @@ app.post('/tools/execute', authRequired, async (req, res) => {
           `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'events_mysql_mirror'`
         );
         const cols = new Set((colsRes.rows || []).map(r => r.column_name));
-        if (cols.size === 0) return res.status(404).json({ ok: false, error: 'events_mysql_mirror not found' });
+        // We'll build from Postgres mirror when present, then merge any missing items from MySQL (fallback)
 
         const selectCols = ['id'];
         const titleCol = cols.has('title') ? 'title' : (cols.has('name') ? 'name' : null);
@@ -1250,35 +1251,57 @@ app.post('/tools/execute', authRequired, async (req, res) => {
         const maybeCols = ['start_at','starts_at','start_datetime','event_start','datetime','scheduled_at','event_date','start_date','date','start_time','time'];
         const present = maybeCols.filter(c => cols.has(c));
         selectCols.push(...present);
-        const sql = `SELECT ${selectCols.join(', ')} FROM events_mysql_mirror`;
-        const ev = await query(sql);
+        let items = [];
         const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
         const now = new Date();
-        const items = (ev.rows || []).map(row => {
-          const title = titleCol ? row[titleCol] : (row.title || row.name || `Course ${row.id || ''}`);
-          // Derive a start Date
-          let start = null;
-          const val = (k) => (k && row[k] != null ? String(row[k]) : null);
-          const datePart = val('event_date') || val('start_date') || val('date');
-          const timePart = val('start_time') || val('time');
-          const directTs = val('start_at') || val('starts_at') || val('start_datetime') || val('event_start') || val('datetime') || val('scheduled_at');
-          if (directTs) {
-            const d = new Date(directTs);
-            if (!isNaN(d)) start = d;
-          } else if (datePart && timePart) {
-            const d = new Date(`${datePart} ${timePart}`);
-            if (!isNaN(d)) start = d;
-          } else if (datePart) {
-            const d = new Date(`${datePart}T00:00:00`);
-            if (!isNaN(d)) start = d;
+        if (cols.size > 0) {
+          const sql = `SELECT ${selectCols.join(', ')} FROM events_mysql_mirror`;
+          const ev = await query(sql);
+          items = (ev.rows || []).map(row => {
+            const title = titleCol ? row[titleCol] : (row.title || row.name || `Course ${row.id || ''}`);
+            // Derive a start Date
+            let start = null;
+            const val = (k) => (k && row[k] != null ? String(row[k]) : null);
+            const datePart = val('event_date') || val('start_date') || val('date');
+            const timePart = val('start_time') || val('time');
+            const directTs = val('start_at') || val('starts_at') || val('start_datetime') || val('event_start') || val('datetime') || val('scheduled_at');
+            if (directTs) {
+              const d = new Date(directTs);
+              if (!isNaN(d)) start = d;
+            } else if (datePart && timePart) {
+              const d = new Date(`${datePart} ${timePart}`);
+              if (!isNaN(d)) start = d;
+            } else if (datePart) {
+              const d = new Date(`${datePart}T00:00:00`);
+              if (!isNaN(d)) start = d;
+            }
+            const status = start ? (start.getTime() > now.getTime() ? 'upcoming' : (start.toDateString() === now.toDateString() ? 'today' : 'past')) : 'unknown';
+            let start_local = null;
+            try {
+              if (start) start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start);
+            } catch (_) {}
+            return { id: row.id || null, title, start_iso: start ? start.toISOString() : null, start_local, status };
+          });
+        }
+
+        // Fallback/merge from MySQL when mirror is missing or lagging
+        try {
+          const mysqlRows = await mysqlDb.query(`SELECT id, title, start_at FROM events ORDER BY start_at ASC`);
+          const map = new Map();
+          for (const it of items) { if (it && it.id != null) map.set(String(it.id), it); }
+          for (const r of (mysqlRows || [])) {
+            const key = String(r.id);
+            if (!map.has(key)) {
+              const title = r.title || `Course ${r.id || ''}`;
+              const start = r.start_at ? new Date(r.start_at) : null;
+              const status = start ? (start.getTime() > now.getTime() ? 'upcoming' : (start.toDateString() === now.toDateString() ? 'today' : 'past')) : 'unknown';
+              let start_local = null;
+              try { if (start) start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start); } catch(_) {}
+              map.set(key, { id: r.id, title, start_iso: start ? start.toISOString() : null, start_local, status });
+            }
           }
-          const status = start ? (start.getTime() > now.getTime() ? 'upcoming' : (start.toDateString() === now.toDateString() ? 'today' : 'past')) : 'unknown';
-          let start_local = null;
-          try {
-            if (start) start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start);
-          } catch (_) {}
-          return { id: row.id || null, title, start_iso: start ? start.toISOString() : null, start_local, status };
-        });
+          items = Array.from(map.values());
+        } catch (_) { /* ignore MySQL fallback errors */ }
         // Sort upcoming first by time asc, then today, then past by time desc
         items.sort((a,b) => {
           const rank = (s) => s === 'upcoming' ? 0 : (s === 'today' ? 1 : (s === 'past' ? 2 : 3));
@@ -1301,37 +1324,47 @@ app.post('/tools/execute', authRequired, async (req, res) => {
         const { limit, days_ahead } = args || {};
         const lim = Math.min(10, Math.max(1, Number(limit) || 3));
         const ahead = Math.min(180, Math.max(1, Number(days_ahead) || 60));
-        // Use list_courses result and filter upcoming within N days
-        req.body = { name: 'list_courses', arguments: {} };
+        // Use list_courses-like aggregator and filter upcoming within N days
         const listRes = await (async () => {
-          // Quick internal call
           const colsRes = await query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='events_mysql_mirror'`);
-          if ((colsRes.rows || []).length === 0) return { ok: true, items: [] };
-          const cols = new Set(colsRes.rows.map(r=>r.column_name));
+          const cols = new Set((colsRes.rows || []).map(r=>r.column_name));
           const selectCols = ['id'];
           const titleCol = cols.has('title') ? 'title' : (cols.has('name') ? 'name' : null);
           if (titleCol) selectCols.push(titleCol);
           const maybeCols = ['start_at','starts_at','start_datetime','event_start','datetime','scheduled_at','event_date','start_date','date','start_time','time'];
           const present = maybeCols.filter(c => cols.has(c));
           selectCols.push(...present);
-          const sql = `SELECT ${selectCols.join(', ')} FROM events_mysql_mirror`;
-          const ev = await query(sql);
-          const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
-          const now = new Date();
-          const items = (ev.rows || []).map(row => {
-            const title = titleCol ? row[titleCol] : (row.title || row.name || `Course ${row.id || ''}`);
-            let start = null;
-            const val = (k) => (k && row[k] != null ? String(row[k]) : null);
-            const datePart = val('event_date') || val('start_date') || val('date');
-            const timePart = val('start_time') || val('time');
-            const directTs = val('start_at') || val('starts_at') || val('start_datetime') || val('event_start') || val('datetime') || val('scheduled_at');
-            if (directTs) { const d = new Date(directTs); if (!isNaN(d)) start = d; }
-            else if (datePart && timePart) { const d = new Date(`${datePart} ${timePart}`); if (!isNaN(d)) start = d; }
-            else if (datePart) { const d = new Date(`${datePart}T00:00:00`); if (!isNaN(d)) start = d; }
-            let start_local = null;
-            try { if (start) start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start); } catch(_) {}
-            return { id: row.id || null, title, start };
-          });
+          let items = [];
+          if (cols.size > 0) {
+            const sql = `SELECT ${selectCols.join(', ')} FROM events_mysql_mirror`;
+            const ev = await query(sql);
+            items = (ev.rows || []).map(row => {
+              const title = titleCol ? row[titleCol] : (row.title || row.name || `Course ${row.id || ''}`);
+              let start = null;
+              const val = (k) => (k && row[k] != null ? String(row[k]) : null);
+              const datePart = val('event_date') || val('start_date') || val('date');
+              const timePart = val('start_time') || val('time');
+              const directTs = val('start_at') || val('starts_at') || val('start_datetime') || val('event_start') || val('datetime') || val('scheduled_at');
+              if (directTs) { const d = new Date(directTs); if (!isNaN(d)) start = d; }
+              else if (datePart && timePart) { const d = new Date(`${datePart} ${timePart}`); if (!isNaN(d)) start = d; }
+              else if (datePart) { const d = new Date(`${datePart}T00:00:00`); if (!isNaN(d)) start = d; }
+              return { id: row.id || null, title, start };
+            });
+          }
+          // MySQL fallback/merge
+          try {
+            const mysqlRows = await mysqlDb.query(`SELECT id, title, start_at FROM events ORDER BY start_at ASC`);
+            const map = new Map();
+            for (const it of items) { if (it && it.id != null) map.set(String(it.id), it); }
+            for (const r of (mysqlRows || [])) {
+              const key = String(r.id);
+              if (!map.has(key)) {
+                const start = r.start_at ? new Date(r.start_at) : null;
+                map.set(key, { id: r.id, title: r.title || `Course ${r.id || ''}`, start });
+              }
+            }
+            items = Array.from(map.values());
+          } catch (_) {}
           return { ok: true, items };
         })();
         const now = new Date();
@@ -1363,6 +1396,64 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       } catch (e) {
         console.error('get_event_quiz error', e);
         return res.status(500).json({ ok:false, error:'get_event_quiz_failed' });
+      }
+    }
+
+    if (toolName === 'get_event_summary') {
+      try {
+        let { event_id, title } = args || {};
+        let eid = Number(event_id);
+        if (!eid || isNaN(eid)) eid = null;
+        const titleStr = (title && String(title).trim()) || null;
+
+        // Resolve event id by title if needed (Postgres mirror then MySQL)
+        if (!eid && titleStr) {
+          try {
+            const r = await query(`SELECT id FROM events_mysql_mirror WHERE LOWER(title) = LOWER($1) OR LOWER(name) = LOWER($1) ORDER BY id DESC LIMIT 1`, [titleStr]);
+            if (r && r.rows && r.rows.length) eid = Number(r.rows[0].id);
+          } catch (_) {}
+          if (!eid) {
+            try {
+              const m = await mysqlDb.query(`SELECT id FROM events WHERE LOWER(title) = LOWER(?) ORDER BY id DESC LIMIT 1`, [titleStr]);
+              if (m && m.length) eid = Number(m[0].id);
+            } catch (_) {}
+          }
+        }
+
+        if (!eid) return res.status(400).json({ ok:false, error:'event_id_or_title_required' });
+
+        // Fetch latest summary from Postgres mirror (preferred) then MySQL
+        let row = null;
+        try {
+          const s = await query(`SELECT id, event_id, summary, summary_full, updated_at FROM events_summary_mysql_mirror WHERE event_id = $1 ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT 1`, [eid]);
+          row = (s && s.rows && s.rows[0]) || null;
+        } catch (_) { row = null; }
+        if (!row) {
+          try {
+            const s2 = await mysqlDb.query(`SELECT id, event_id, summary, summary_full, updated_at FROM events_summary WHERE event_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1`, [eid]);
+            row = (s2 && s2[0]) || null;
+          } catch (_) { row = null; }
+        }
+
+        // Determine event title
+        let eventTitle = null;
+        try {
+          const tr = await query(`SELECT title, name FROM events_mysql_mirror WHERE id = $1 LIMIT 1`, [eid]);
+          if (tr && tr.rows && tr.rows[0]) eventTitle = tr.rows[0].title || tr.rows[0].name || null;
+        } catch (_) {}
+        if (!eventTitle) {
+          try {
+            const rr = await mysqlDb.query(`SELECT title FROM events WHERE id = ? LIMIT 1`, [eid]);
+            if (rr && rr[0] && rr[0].title) eventTitle = rr[0].title;
+          } catch (_) {}
+        }
+
+        if (!row) return res.json({ ok:true, found:false, event_id: eid, event_title: eventTitle || null });
+        const html = String(row.summary_full || row.summary || '').trim();
+        return res.json({ ok:true, found:true, event_id: eid, event_title: eventTitle || null, summary_html: html, updated_at: row.updated_at || null });
+      } catch (e) {
+        console.error('get_event_summary error', e);
+        return res.status(500).json({ ok:false, error:'get_event_summary_failed' });
       }
     }
 
