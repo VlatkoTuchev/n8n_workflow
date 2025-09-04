@@ -1118,6 +1118,13 @@
                             const close = document.createElement('button'); close.className = 'quiz-btn'; close.textContent = 'Close'; close.onclick = ()=> quizState.overlay.classList.remove('open');
                             body.appendChild(res); body.appendChild(close);
                         } catch (_) { body.innerHTML = '<div class="quiz-q">Submission failed. Please try again.</div>'; }
+                        // Encourage guidance without revealing answers
+                        try {
+                            dc.send(JSON.stringify({
+                                type: 'response.create',
+                                response: { modalities: ['text'], instructions: 'Nice work. I won\'t reveal answers, but if any question felt tricky, say the number and I\'ll give you a short hint or point to the right section to review.' }
+                            }));
+                        } catch(_) {}
                     };
                 }
 
@@ -1183,10 +1190,10 @@
                 // Events list + Enter action (creates attendance in MySQL)
                 // ------------------------------------------------------------
                 async function loadEvents() {
-                    try {
-                        const r = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'list_courses', arguments:{} }) });
-                        const j = await r.json();
-                        if (!j || !j.ok) return;
+                        try {
+                            const r = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'list_courses', arguments:{} }) });
+                            const j = await r.json();
+                            if (!j || !j.ok) return;
                         const list = document.getElementById('eventsList');
                         if (!list) return;
                         list.innerHTML = '';
@@ -1562,8 +1569,8 @@
                                         try { const cap = document.getElementById('codeAssistPanel'); if (cap) cap.classList.remove('open'); } catch(_) {}
                                         quizState.overlay.classList.add('open');
                                         renderQuizQuestion();
-                                        // Send a text-only acknowledgement so the assistant does NOT read the questions out loud
-                                        dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['text'], instructions: 'I opened a short quiz in the center of your screen. Select an answer and press Next; submit when done.' } }));
+                                        // Send a text-only acknowledgement + coaching policy. Do NOT read the questions or reveal answers.
+                                        dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['text'], instructions: 'I opened a short quiz in the center of your screen. I will be your coach — I won\'t reveal answers. I\'ll give one short hint at a time and ask what you think. When you\'re ready, pick an option and submit.' } }));
                                         // Do not immediately request another spoken response
                                         return;
                                     }
