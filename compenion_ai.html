@@ -1276,22 +1276,8 @@
                 try { loadEvents(); } catch (_) {}
 
                 function maybeSendFiller() {
-                    try {
-                        const nowMs = Date.now();
-                        if (greetingInProgress) return;
-                        if (isResponseActive || responseRequested) return; // avoid overlapping response.create
-                        if (nowMs - lastFillerMs < 1200) return; // debounce
-                        responseRequested = true;
-                        const lang = currentPreferredLanguage || 'English';
-                        dc.send(JSON.stringify({
-                            type: 'response.create',
-                            response: {
-                                modalities: ['audio','text'],
-                                instructions: `In ${lang}, speak ONE ultra‑brief acknowledgement (≤1s)—e.g., “on it” or “working on it”—then continue silently while the task runs.`
-                            }
-                        }));
-                        lastFillerMs = nowMs;
-                    } catch (_) {}
+                    // Intentionally silent — no spoken acknowledgements while tools run.
+                    try { lastFillerMs = Date.now(); } catch (_) {}
                 }
 
                 // Client-side idle finalizer as a safety net for inactivity
@@ -1335,6 +1321,23 @@
                         const timer = setTimeout(() => resolve(false), Math.max(200, timeoutMs));
                         sessionUpdateWaiters.push(() => { try { clearTimeout(timer); } catch (_) {} resolve(true); });
                     });
+                }
+
+                // Prevent tool-call loops: temporarily disable tool calls for the follow-up response
+                let toolFollowupLock = false;
+                async function beginNoToolFollowup(instructionsText) {
+                    try {
+                        if (toolFollowupLock) return;
+                        toolFollowupLock = true;
+                        dc.send(JSON.stringify({ type: 'session.update', session: { tool_choice: 'none' } }));
+                        await waitForSessionUpdated(1200);
+                    } catch (_) {}
+                    // Immediately ask the model to continue speaking (without tools)
+                    if (instructionsText && typeof instructionsText === 'string' && instructionsText.trim()) {
+                        dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio', 'text'], instructions: instructionsText } }));
+                    } else {
+                        if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
+                    }
                 }
 
                 function ensureCodeAssistLauncher() {
@@ -1484,6 +1487,14 @@
                             isResponseActive = false;
                             responseRequested = false; // NEW
                             resetIdleTimer();
+                            // Restore tool usage if we temporarily disabled it for follow-up
+                            if (toolFollowupLock) {
+                                toolFollowupLock = false;
+                                try {
+                                    dc.send(JSON.stringify({ type: 'session.update', session: { tool_choice: 'auto' } }));
+                                    await waitForSessionUpdated(1200);
+                                } catch (_) {}
+                            }
                             if (assistantTextBuf && assistantTextBuf.trim()) {
                                 try {
                                     const uid = await getUserId();
@@ -1594,6 +1605,8 @@
                                     maybeSendFiller();
                                     const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_event_quiz', arguments:{ event_id: Number(args.event_id) } }) }).then(r=>r.json());
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
+                                    if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
                                     if (out && out.ok && args.event_id) {
                                         quizState.questions = out.questions || [];
                                         quizState.quizId = out.quiz_id || null;
@@ -1625,6 +1638,7 @@
                                     if (args.title != null) payload.title = String(args.title);
                                     const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_event_summary', arguments: payload }) }).then(r=>r.json());
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
                                     if (out && out.ok && out.found) {
                                         ensureSummaryUI();
                                         openSummaryHtml(out.summary_html || '', out.event_title || '');
@@ -1650,8 +1664,75 @@
                                     if (args.title != null) payload.title = String(args.title);
                                     const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_event_details', arguments: payload }) }).then(r=>r.json());
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    await beginNoToolFollowup();
                                 } catch (e) {
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'get_event_details_failed' }) } }));
+                                }
+                                return;
+                            }
+
+                            if (name === 'list_courses') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
+                                try {
+                                    maybeSendFiller();
+                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'list_courses', arguments: args || {} }) }).then(r=>r.json());
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    await beginNoToolFollowup();
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'list_courses_failed' }) } }));
+                                }
+                                return;
+                            }
+
+                            if (name === 'recommend_courses') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
+                                try {
+                                    maybeSendFiller();
+                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'recommend_courses', arguments: args || {} }) }).then(r=>r.json());
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    await beginNoToolFollowup();
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'recommend_courses_failed' }) } }));
+                                }
+                                return;
+                            }
+
+                            if (name === 'add_user_memory' || name === 'user_memory_add' || name === 'save_user_memory') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
+                                try {
+                                    maybeSendFiller();
+                                    const payload = {};
+                                    if (args.type) payload.type = String(args.type);
+                                    if (args.statement) payload.statement = String(args.statement);
+                                    if (Array.isArray(args.items)) payload.items = args.items;
+                                    if (args.pinned != null) payload.pinned = !!args.pinned;
+                                    if (args.stability != null) payload.stability = String(args.stability);
+                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'add_user_memory', arguments: payload }) }).then(r=>r.json());
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    await beginNoToolFollowup();
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'add_user_memory_failed' }) } }));
+                                }
+                                return;
+                            }
+
+                            if (name === 'get_user_memory' || name === 'list_user_memory') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
+                                try {
+                                    maybeSendFiller();
+                                    const payload = {};
+                                    if (args.type) payload.type = String(args.type);
+                                    if (args.limit != null) payload.limit = Number(args.limit);
+                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_user_memory', arguments: payload }) }).then(r=>r.json());
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    await beginNoToolFollowup();
+                                    if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'get_user_memory_failed' }) } }));
                                 }
                                 return;
                             }
@@ -1663,10 +1744,7 @@
                                     maybeSendFiller();
                                     const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'user_favourite', arguments:{ event_id: Number(args.event_id) } }) }).then(r=>r.json());
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
-                                    if (out && out.ok) {
-                                        dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: 'Added to your favorites. I can also mark you as attending or set a quick reminder — what would you like?' } }));
-                                        return;
-                                    }
+                                    if (out && out.ok) { await beginNoToolFollowup('Added to your favorites. I can also mark you as attending or set a quick reminder — what would you like?'); return; }
                                 } catch (e) {
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'user_favourite_failed' }) } }));
                                 }
@@ -1682,10 +1760,7 @@
                                     let sid = getSessionId(); if (!sid) sid = await startNewSessionForUser(uid);
                                     const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'enter_event', arguments:{ event_id: Number(args.event_id), sessionId: sid } }) }).then(r=>r.json());
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
-                                    if (out && out.ok) {
-                                        dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: 'Great — I marked you as attending. I can open the materials or a short quiz when you are ready.' } }));
-                                        return;
-                                    }
+                                    if (out && out.ok) { await beginNoToolFollowup('Great — I marked you as attending. I can open the materials or a short quiz when you are ready.'); return; }
                                 } catch (e) {
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'enter_event_failed' }) } }));
                                 }

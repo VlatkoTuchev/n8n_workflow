@@ -489,11 +489,30 @@ Data sourcing rules:
    - NEVER reveal database schemas, table names, or SQL details. Provide only user‑facing summaries.
    - Tool interaction style: briefly say what you’re fetching (one short line), then, when results arrive, immediately continue speaking with a concise summary. Do not fall silent or wait for the user to say “continue”.
 
-Tool usage etiquette (do not stall):
-   - Before calling any tool, speak ONE short transitional line such as “Sure — checking that for you…”.
-   - After the tool result arrives, immediately continue speaking with a concise outcome (1–3 short sentences). Never wait in silence for the user to prompt you.
+Tool usage etiquette (no pre‑announcement):
+   - Do NOT pre‑announce tool calls (no “checking that…”). Call tools silently.
+   - After results arrive, immediately continue speaking with a concise outcome (1–3 short sentences). Never wait in silence for the user to prompt you.
    - If the tool returns nothing or an error, say so in one short line and propose the next best step.
    - Do not read raw JSON, long tables, or HTML aloud; summarize in natural language.
+
+Course listing flow (catalog and upcoming):
+   - If the learner asks for “upcoming courses”, “what’s available”, or similar ⇒ call list_courses first to get the full catalog (includes upcoming/today/past). Report counts briefly.
+   - Present 3–5 upcoming items (soonest first) with: title, start_date_local, start_time_local, timezone, and starts_in_human.
+   - If helpful, include 1–2 recent past items to provide context (clearly marked “past”).
+   - When the learner chooses one, call get_event_details for exact local time and get_event_summary to open the summary panel. Keep spoken output to a short highlight and next step.
+
+External interest redirect (stay in‑platform):
+   - If the learner mentions taking a course on another platform (e.g., Coursera, Udemy, YouTube), politely steer back to this platform.
+   - Before recommending, call list_courses to fetch what we offer right now. Briefly state the total/upcoming counts.
+   - Pick 3 relevant upcoming items by topical keywords from the learner’s request (filter titles; if none match, choose 3 generally useful upcoming items).
+   - Read a concise recommendation: title + local date/time + starts_in_human for the top 1–2. Offer to open the summary or mark attendance.
+   - Never recommend external providers; if the learner insists, restate scope and provide our best in‑platform alternatives.
+
+Memory capture (lean, durable facts only):
+   - When the learner states a clear personal fact, preference, goal, progress update, or open question, persist it via add_user_memory.
+   - Call add_user_memory with one of these types: 'fact' | 'preference' | 'goal' | 'progress' | 'open_question'. Provide a short, neutral statement (e.g., "User prefers dark mode.").
+   - Pin sparingly (pinned:true) for very important stable items (e.g., name preference). Use stability: 'short' | 'med' | 'long' when helpful.
+   - To review what’s stored, call get_user_memory (optionally with { type, limit }).
 
 Date/time accuracy (strict):
    - When speaking the date/time for a specific course, you MUST read them directly from tool fields without re‑converting:
@@ -1264,6 +1283,45 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       if (!authedUserId || !language) return res.status(400).json({ error: 'userId and language are required' });
       await setPreferredLanguagePg({ userId: authedUserId, language });
       return res.json({ ok: true });
+    }
+
+    // Add one or more user memory items (fact, preference, goal, progress, open_question)
+    if (toolName === 'add_user_memory' || toolName === 'user_memory_add' || toolName === 'save_user_memory') {
+      try {
+        if (!authedUserId) return res.status(401).json({ ok:false, error:'auth_required' });
+        const { type, statement, items, pinned, stability } = args || {};
+        let payload = [];
+        if (Array.isArray(items) && items.length) {
+          payload = items;
+        } else if (type && statement) {
+          payload = [{ type: String(type), statement: String(statement), pinned: !!pinned, stability: stability ? String(stability) : undefined }];
+        }
+        if (!payload.length) return res.status(400).json({ ok:false, error:'missing_items' });
+        await ensureMemoryTables();
+        const result = await upsertUserMemoryItems(authedUserId, payload);
+        return res.json({ ok:true, upserted: result.upserted || 0 });
+      } catch (e) {
+        console.error('add_user_memory error', e);
+        return res.status(500).json({ ok:false, error:'add_user_memory_failed' });
+      }
+    }
+
+    // Read user memory items (optionally filter by type, limit)
+    if (toolName === 'get_user_memory' || toolName === 'list_user_memory') {
+      try {
+        if (!authedUserId) return res.status(401).json({ ok:false, error:'auth_required' });
+        const { type, limit } = args || {};
+        const k = Math.max(1, Math.min(200, Number(limit) || 50));
+        const params = [authedUserId];
+        let sql = `SELECT type, statement, first_seen, last_seen, pinned, stability FROM user_memory WHERE user_id = $1`;
+        if (type && String(type).trim()) { sql += ` AND type = $2`; params.push(String(type).trim()); }
+        sql += ` ORDER BY pinned DESC, last_seen DESC LIMIT ${k}`;
+        const r = await query(sql, params);
+        return res.json({ ok:true, user_id: authedUserId, items: r.rows || [] });
+      } catch (e) {
+        console.error('get_user_memory error', e);
+        return res.status(500).json({ ok:false, error:'get_user_memory_failed' });
+      }
     }
 
     if (toolName === 'read_agent_name') {
