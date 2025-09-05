@@ -845,6 +845,22 @@
                     },
                     {
                         type: 'function',
+                        name: 'get_event_summary',
+                        description: 'Fetch the saved HTML summary for a given course by id or title',
+                        parameters: {
+                            type: 'object',
+                            properties: { event_id: { type: 'number' }, title: { type: 'string' } },
+                            additionalProperties: false
+                        }
+                    },
+                    {
+                        type: 'function',
+                        name: 'get_event_quiz',
+                        description: 'Fetch the practice quiz for a given event (if available)',
+                        parameters: { type: 'object', properties: { event_id: { type: 'number' } }, additionalProperties: false }
+                    },
+                    {
+                        type: 'function',
                         name: 'update_code_assist_chat',
                         description: 'Update the existing code assist panel by appending or replacing code/explanation, changing the title/problem, or adding next actions. Re-render the panel immediately.',
                         parameters: {
@@ -876,6 +892,12 @@
                         name: 'set_fight',
                         description: 'Switch the 3D avatar to boxing/fighting animation',
                         parameters: { type: 'object', properties: {}, additionalProperties: false },
+                    },
+                    {
+                        type: 'function',
+                        name: 'get_event_details',
+                        description: 'Get exact local date/time and relative start (days/weeks) for a specific course by id or title.',
+                        parameters: { type: 'object', properties: { event_id: { type: 'number' }, title: { type: 'string' } }, additionalProperties: false }
                     },
                     {
                         type: 'function',
@@ -966,18 +988,30 @@
                     {
                         type: 'function',
                         name: 'list_courses',
-                        description: 'List all courses from events_mysql_mirror with start time and status (upcoming/today/past) in local time',
+                        description: 'List all courses with local start date/time (start_local, start_date_local=YYYY-MM-DD, start_time_local=HH:mm, weekday), timezone, and status (upcoming/today/past).',
                         parameters: { type: 'object', properties: {}, additionalProperties: false }
                     },
                     {
                         type: 'function',
                         name: 'recommend_courses',
-                        description: 'Recommend up to N upcoming courses within a days-ahead window',
+                        description: 'Recommend up to N upcoming courses within a days-ahead window; includes local date/time fields like list_courses.',
                         parameters: {
                             type: 'object',
                             properties: { limit: { type: 'number' }, days_ahead: { type: 'number' } },
                             additionalProperties: false
                         }
+                    },
+                    {
+                        type: 'function',
+                        name: 'enter_event',
+                        description: 'Mark the current user as attending an event (joins the event)',
+                        parameters: { type: 'object', properties: { event_id: { type: 'number' } }, required: ['event_id'], additionalProperties: false }
+                    },
+                    {
+                        type: 'function',
+                        name: 'user_favourite',
+                        description: 'Add the event to the user\'s favorites/wishlist (event_user_favorites).',
+                        parameters: { type: 'object', properties: { event_id: { type: 'number' } }, required: ['event_id'], additionalProperties: false }
                     }
                 ];
 
@@ -1594,14 +1628,67 @@
                                     if (out && out.ok && out.found) {
                                         ensureSummaryUI();
                                         openSummaryHtml(out.summary_html || '', out.event_title || '');
-                                        dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: `I opened the summary for “${out.event_title || 'the course'}”.` } }));
+                                        // Speak a short verbal summary and the next step prompt
+                                        dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['audio','text'], instructions: `I opened the summary for “${out.event_title || 'the course'}”. In two short sentences, highlight the key takeaway from the summary you just received, then ask if they want a quick quiz or to mark attendance.` } }));
                                         return;
                                     }
                                 } catch (e) {
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'summary_fetch_failed' }) } }));
                                 }
-                                // Avoid extra follow-up speech
-                                dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: 'I couldn\'t find a saved summary for that course yet.' } }));
+                                // If not found, speak a short notice and offer alternatives
+                                dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['audio','text'], instructions: 'I couldn\'t find a saved summary for that course yet. I can recommend an upcoming session or open another summary — what would you like?' } }));
+                                return;
+                            }
+
+                            if (name === 'get_event_details') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
+                                try {
+                                    maybeSendFiller();
+                                    const payload = {};
+                                    if (args.event_id != null) payload.event_id = Number(args.event_id);
+                                    if (args.title != null) payload.title = String(args.title);
+                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_event_details', arguments: payload }) }).then(r=>r.json());
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'get_event_details_failed' }) } }));
+                                }
+                                return;
+                            }
+
+                            if (name === 'user_favourite') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
+                                try {
+                                    maybeSendFiller();
+                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'user_favourite', arguments:{ event_id: Number(args.event_id) } }) }).then(r=>r.json());
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    if (out && out.ok) {
+                                        dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: 'Added to your favorites. I can also mark you as attending or set a quick reminder — what would you like?' } }));
+                                        return;
+                                    }
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'user_favourite_failed' }) } }));
+                                }
+                                return;
+                            }
+
+                            if (name === 'enter_event') {
+                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
+                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
+                                try {
+                                    maybeSendFiller();
+                                    const uid = await getUserId();
+                                    let sid = getSessionId(); if (!sid) sid = await startNewSessionForUser(uid);
+                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'enter_event', arguments:{ event_id: Number(args.event_id), sessionId: sid } }) }).then(r=>r.json());
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
+                                    if (out && out.ok) {
+                                        dc.send(JSON.stringify({ type:'response.create', response:{ modalities:['text'], instructions: 'Great — I marked you as attending. I can open the materials or a short quiz when you are ready.' } }));
+                                        return;
+                                    }
+                                } catch (e) {
+                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'enter_event_failed' }) } }));
+                                }
                                 return;
                             }
 

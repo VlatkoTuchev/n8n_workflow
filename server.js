@@ -484,8 +484,33 @@ Data sourcing rules:
    - For course listings, dates, or recommendations, you MUST call the provided tools:
      * list_courses to retrieve available courses and start times
      * recommend_courses to suggest upcoming items within a date window
+     * get_event_details when referencing a single specific course by title or id (to obtain exact local date/time and relative start like “in 5 days”)
    - Do NOT invent courses or dates. If tools return nothing, say you don’t have matching items.
    - NEVER reveal database schemas, table names, or SQL details. Provide only user‑facing summaries.
+   - Tool interaction style: briefly say what you’re fetching (one short line), then, when results arrive, immediately continue speaking with a concise summary. Do not fall silent or wait for the user to say “continue”.
+
+Tool usage etiquette (do not stall):
+   - Before calling any tool, speak ONE short transitional line such as “Sure — checking that for you…”.
+   - After the tool result arrives, immediately continue speaking with a concise outcome (1–3 short sentences). Never wait in silence for the user to prompt you.
+   - If the tool returns nothing or an error, say so in one short line and propose the next best step.
+   - Do not read raw JSON, long tables, or HTML aloud; summarize in natural language.
+
+Date/time accuracy (strict):
+   - When speaking the date/time for a specific course, you MUST read them directly from tool fields without re‑converting:
+     * Prefer get_event_details.event.start_date_local + get_event_details.event.start_time_local + (event.timezone)
+     * Alternatively, for list/recommend results use item.start_date_local + item.start_time_local + (item.timezone)
+   - Do NOT recompute, translate, or guess dates from titles or summaries. If any doubt, call get_event_details again before speaking.
+   - Always include the relative start (item.starts_in_human) when available (e.g., “in 6 days”).
+
+Proactive course guidance (reduce churn):
+   - When the learner mentions a goal, blocker, or interest (even implicitly), gently steer toward a relevant upcoming course on this platform.
+   - Action pattern (voice first, keep it natural and short):
+      1) If needed, ask ONE clarifying line to infer the topic/level.
+      2) Call recommend_courses with { limit: 3, days_ahead: 45 } OR list_courses and filter by title keywords.
+      3) Pick 1–2 best matches (soonest first). For the top match, call get_event_details to get exact local date/time and relative start, and optionally get_event_summary for a 1–2 line "you’ll learn" blurb.
+      4) Present the recommendation: title + local start date/time + relative (“in 6 days”) + 1‑line benefit tied to the learner’s situation.
+      5) Ask a friendly yes/no: “Want me to mark you as attending?” If yes, call enter_event with event_id. If no, offer the next best option or ask what would help more.
+   - Keep tone encouraging and career‑oriented (how it helps on the job). Never overwhelm: at most 2 items at once.
 
 First turn policy:
    - Do NOT assume continuity. For the first response in a new session: greet naturally (use preferred name) and ask ONE short question such as “Want to pick up where we left off or start something new?” or “What would you like to learn today?”. Do not reference prior content yet.
@@ -1176,6 +1201,45 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       }
     }
 
+    // Add to favorites/wishlist (MySQL: event_user_favorites); mirrored to Postgres
+    if (toolName === 'user_favourite' || toolName === 'user_favorite' || toolName === 'favorite_event' || toolName === 'favourite_event') {
+      try {
+        const { event_id } = args || {};
+        const eid = Number(event_id);
+        if (!eid || isNaN(eid)) return res.status(400).json({ ok:false, error:'event_id required' });
+        const userEmail = (req.user && req.user.email) || null;
+        if (!userEmail) return res.status(401).json({ ok:false, error:'auth_required' });
+        // Resolve/create MySQL user id
+        let mysqlUserId = null;
+        try { const u = await mysqlDb.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [userEmail]); if (u && u.length) mysqlUserId = u[0].id; } catch(_) {}
+        if (!mysqlUserId) { try { await ensureMysqlUserForEmail(userEmail, null); } catch(_) {}
+          try { const u2 = await mysqlDb.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [userEmail]); if (u2 && u2.length) mysqlUserId = u2[0].id; } catch(_) {}
+        }
+        if (!mysqlUserId) return res.status(500).json({ ok:false, error:'user_not_in_mysql' });
+
+        // Idempotent favorite insert
+        let favoriteId = null;
+        try {
+          const existing = await mysqlDb.query(`SELECT id FROM event_user_favorites WHERE user_id=? AND event_id=? LIMIT 1`, [mysqlUserId, eid]);
+          if (existing && existing.length) {
+            favoriteId = existing[0].id;
+            await mysqlDb.query(`UPDATE event_user_favorites SET updated_at=NOW() WHERE id=?`, [favoriteId]);
+          } else {
+            await mysqlDb.query(`INSERT INTO event_user_favorites (user_id, event_id, created_at, updated_at) VALUES (?,?,NOW(),NOW())`, [mysqlUserId, eid]);
+            const r2 = await mysqlDb.query(`SELECT id FROM event_user_favorites WHERE user_id=? AND event_id=? ORDER BY id DESC LIMIT 1`, [mysqlUserId, eid]);
+            favoriteId = r2 && r2.length ? r2[0].id : null;
+          }
+        } catch (e) {
+          console.warn('user_favourite insert failed', e?.message || e);
+        }
+
+        return res.json({ ok:true, favorite_id: favoriteId, event_id: eid, user_id: mysqlUserId });
+      } catch (e) {
+        console.error('user_favourite error', e);
+        return res.status(500).json({ ok:false, error:'user_favourite_failed' });
+      }
+    }
+
     if (toolName === 'summarize_session' || toolName === 'finalize_session') {
       const { sessionId } = args || {};
       if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
@@ -1255,6 +1319,23 @@ app.post('/tools/execute', authRequired, async (req, res) => {
         let items = [];
         const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
         const now = new Date();
+        function computeRelative(start) {
+          if (!start) return { starts_in_days: null, starts_in_weeks: null, starts_in_human: null };
+          const diffMs = start.getTime() - now.getTime();
+          if (diffMs <= 0) return { starts_in_days: 0, starts_in_weeks: 0, starts_in_human: 'started' };
+          const days = Math.ceil(diffMs / (24*3600*1000));
+          const weeks = Math.floor(days / 7);
+          let human = '';
+          if (days < 1) {
+            const hrs = Math.max(1, Math.round(diffMs / (3600*1000)));
+            human = `in ${hrs} hour${hrs===1?'':'s'}`;
+          } else if (days < 14) {
+            human = `in ${days} day${days===1?'':'s'}`;
+          } else {
+            human = `in ${weeks} week${weeks===1?'':'s'}`;
+          }
+          return { starts_in_days: days, starts_in_weeks: weeks, starts_in_human: human };
+        }
         if (cols.size > 0) {
           const sql = `SELECT ${selectCols.join(', ')} FROM events_mysql_mirror`;
           const ev = await query(sql);
@@ -1277,11 +1358,17 @@ app.post('/tools/execute', authRequired, async (req, res) => {
               if (!isNaN(d)) start = d;
             }
             const status = start ? (start.getTime() > now.getTime() ? 'upcoming' : (start.toDateString() === now.toDateString() ? 'today' : 'past')) : 'unknown';
-            let start_local = null;
+            let start_local = null, start_date_local = null, start_time_local = null, start_weekday_local = null;
             try {
-              if (start) start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start);
+              if (start) {
+                start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start);
+                start_date_local = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit' }).format(start);
+                start_time_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour:'2-digit', minute:'2-digit' }).format(start);
+                start_weekday_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short' }).format(start);
+              }
             } catch (_) {}
-            return { id: row.id || null, title, start_iso: start ? start.toISOString() : null, start_local, status };
+            const rel = computeRelative(start);
+            return { id: row.id || null, title, start_iso: start ? start.toISOString() : null, start_local, start_date_local, start_time_local, start_weekday_local, timezone: tz, status, ...rel };
           });
         }
 
@@ -1296,9 +1383,17 @@ app.post('/tools/execute', authRequired, async (req, res) => {
               const title = r.title || `Course ${r.id || ''}`;
               const start = r.start_at ? new Date(r.start_at) : null;
               const status = start ? (start.getTime() > now.getTime() ? 'upcoming' : (start.toDateString() === now.toDateString() ? 'today' : 'past')) : 'unknown';
-              let start_local = null;
-              try { if (start) start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start); } catch(_) {}
-              map.set(key, { id: r.id, title, start_iso: start ? start.toISOString() : null, start_local, status });
+              let start_local = null, start_date_local = null, start_time_local = null, start_weekday_local = null;
+              try {
+                if (start) {
+                  start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start);
+                  start_date_local = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit' }).format(start);
+                  start_time_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour:'2-digit', minute:'2-digit' }).format(start);
+                  start_weekday_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short' }).format(start);
+                }
+              } catch(_) {}
+              const rel = computeRelative(start);
+              map.set(key, { id: r.id, title, start_iso: start ? start.toISOString() : null, start_local, start_date_local, start_time_local, start_weekday_local, timezone: tz, status, ...rel });
             }
           }
           items = Array.from(map.values());
@@ -1370,11 +1465,123 @@ app.post('/tools/execute', authRequired, async (req, res) => {
         })();
         const now = new Date();
         const futureLimit = new Date(now.getTime() + ahead*24*3600*1000);
-        const upcoming = (listRes.items || []).filter(x => x.start && x.start > now && x.start <= futureLimit).sort((a,b)=>a.start-b.start).slice(0, lim).map(x => ({ id: x.id, title: x.title, start_iso: x.start.toISOString() }));
-        return res.json({ ok: true, recommended: upcoming, window_days: ahead });
+        const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+        const upcoming = (listRes.items || [])
+          .filter(x => x.start && x.start > now && x.start <= futureLimit)
+          .sort((a,b)=>a.start-b.start)
+          .slice(0, lim)
+          .map(x => {
+            let start_local = null, start_date_local = null, start_time_local = null, start_weekday_local = null;
+            try {
+              start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(x.start);
+              start_date_local = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit' }).format(x.start);
+              start_time_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour:'2-digit', minute:'2-digit' }).format(x.start);
+              start_weekday_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short' }).format(x.start);
+            } catch (_) {}
+            const diffMs = x.start.getTime() - now.getTime();
+            let starts_in_days = null, starts_in_weeks = null, starts_in_human = null;
+            if (diffMs <= 0) { starts_in_days = 0; starts_in_weeks = 0; starts_in_human = 'started'; }
+            else {
+              starts_in_days = Math.ceil(diffMs / (24*3600*1000));
+              starts_in_weeks = Math.floor(starts_in_days / 7);
+              if (starts_in_days < 1) {
+                const hrs = Math.max(1, Math.round(diffMs / (3600*1000)));
+                starts_in_human = `in ${hrs} hour${hrs===1?'':'s'}`;
+              } else if (starts_in_days < 14) {
+                starts_in_human = `in ${starts_in_days} day${starts_in_days===1?'':'s'}`;
+              } else {
+                starts_in_human = `in ${starts_in_weeks} week${starts_in_weeks===1?'':'s'}`;
+              }
+            }
+            return { id: x.id, title: x.title, start_iso: x.start.toISOString(), start_local, start_date_local, start_time_local, start_weekday_local, timezone: tz, starts_in_days, starts_in_weeks, starts_in_human };
+          });
+        return res.json({ ok: true, recommended: upcoming, window_days: ahead, timezone: tz });
       } catch (e) {
         console.error('recommend_courses error', e);
         return res.status(500).json({ ok: false, error: 'recommend_courses_failed' });
+      }
+    }
+
+    // Get details (date/time) for a specific course by id or title
+    if (toolName === 'get_event_details') {
+      try {
+        let { event_id, title } = args || {};
+        let eid = Number(event_id);
+        const titleStr = title && String(title).trim() ? String(title).trim() : null;
+        let row = null;
+        // Try Postgres mirror first
+        try {
+          if (eid) {
+            row = await query(`SELECT id, title, name, start_at, starts_at, start_datetime, event_start, datetime, scheduled_at, event_date, start_date, date, start_time, time FROM events_mysql_mirror WHERE id = $1 LIMIT 1`, [eid]);
+            row = (row.rows && row.rows[0]) || null;
+          } else if (titleStr) {
+            row = await query(`SELECT id, title, name, start_at, starts_at, start_datetime, event_start, datetime, scheduled_at, event_date, start_date, date, start_time, time FROM events_mysql_mirror WHERE LOWER(title) = LOWER($1) OR LOWER(name) = LOWER($1) OR LOWER(title) LIKE LOWER('%' || $1 || '%') ORDER BY id DESC LIMIT 1`, [titleStr]);
+            row = (row.rows && row.rows[0]) || null;
+          }
+        } catch (_) { row = null; }
+        // Fallback MySQL
+        if (!row) {
+          try {
+            if (eid) {
+              const m = await mysqlDb.query(`SELECT id, title, start_at FROM events WHERE id=? LIMIT 1`, [eid]);
+              row = (m && m[0]) || null;
+            } else if (titleStr) {
+              const m = await mysqlDb.query(`SELECT id, title, start_at FROM events WHERE LOWER(title)=LOWER(?) OR LOWER(title) LIKE CONCAT('%', LOWER(?), '%') ORDER BY id DESC LIMIT 1`, [titleStr, titleStr]);
+              row = (m && m[0]) || null;
+            }
+          } catch (_) { row = null; }
+        }
+        if (!row) return res.status(404).json({ ok:false, error:'event_not_found' });
+
+        // Normalize title and start
+        const titleOut = row.title || row.name || (titleStr || null);
+        const val = (k) => (k && row[k] != null ? String(row[k]) : null);
+        let start = null;
+        const directTs = val('start_at') || val('starts_at') || val('start_datetime') || val('event_start') || val('datetime') || val('scheduled_at');
+        const datePart = val('event_date') || val('start_date') || val('date');
+        const timePart = val('start_time') || val('time');
+        if (directTs) {
+          const d = new Date(directTs); if (!isNaN(d)) start = d;
+        } else if (datePart && timePart) {
+          const d = new Date(`${datePart} ${timePart}`); if (!isNaN(d)) start = d;
+        } else if (datePart) {
+          const d = new Date(`${datePart}T00:00:00`); if (!isNaN(d)) start = d;
+        }
+
+        const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+        const now = new Date();
+        let start_local = null, start_date_local = null, start_time_local = null, start_weekday_local = null, status = 'unknown';
+        try {
+          if (start) {
+            status = start.getTime() > now.getTime() ? 'upcoming' : (start.toDateString() === now.toDateString() ? 'today' : 'past');
+            start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start);
+            start_date_local = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit' }).format(start);
+            start_time_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour:'2-digit', minute:'2-digit' }).format(start);
+            start_weekday_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short' }).format(start);
+          }
+        } catch (_) {}
+        let starts_in_days = null, starts_in_weeks = null, starts_in_human = null;
+        if (start) {
+          const diffMs = start.getTime() - now.getTime();
+          if (diffMs <= 0) { starts_in_days = 0; starts_in_weeks = 0; starts_in_human = 'started'; }
+          else {
+            starts_in_days = Math.ceil(diffMs / (24*3600*1000));
+            starts_in_weeks = Math.floor(starts_in_days / 7);
+            if (starts_in_days < 1) {
+              const hrs = Math.max(1, Math.round(diffMs / (3600*1000)));
+              starts_in_human = `in ${hrs} hour${hrs===1?'':'s'}`;
+            } else if (starts_in_days < 14) {
+              starts_in_human = `in ${starts_in_days} day${starts_in_days===1?'':'s'}`;
+            } else {
+              starts_in_human = `in ${starts_in_weeks} week${starts_in_weeks===1?'':'s'}`;
+            }
+          }
+        }
+
+        return res.json({ ok:true, event: { id: row.id || eid || null, title: titleOut, start_iso: start ? start.toISOString() : null, start_local, start_date_local, start_time_local, start_weekday_local, timezone: tz, status, starts_in_days, starts_in_weeks, starts_in_human } });
+      } catch (e) {
+        console.error('get_event_details error', e);
+        return res.status(500).json({ ok:false, error:'get_event_details_failed' });
       }
     }
 
