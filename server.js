@@ -1616,13 +1616,52 @@ app.post('/tools/execute', authRequired, async (req, res) => {
 
         // Resolve event id by title if needed (Postgres mirror then MySQL)
         if (!eid && titleStr) {
+          // 1) Exact match (mirror)
           try {
-            const r = await query(`SELECT id FROM events_mysql_mirror WHERE LOWER(title) = LOWER($1) OR LOWER(name) = LOWER($1) ORDER BY id DESC LIMIT 1`, [titleStr]);
+            const r = await query(`SELECT id FROM events_mysql_mirror WHERE LOWER(title) = LOWER($1) OR LOWER(name) = LOWER($1) LIMIT 1`, [titleStr]);
             if (r && r.rows && r.rows.length) eid = Number(r.rows[0].id);
           } catch (_) {}
+          // 2) LIKE '%title%'
           if (!eid) {
             try {
-              const m = await mysqlDb.query(`SELECT id FROM events WHERE LOWER(title) = LOWER(?) ORDER BY id DESC LIMIT 1`, [titleStr]);
+              const r = await query(`SELECT id FROM events_mysql_mirror WHERE LOWER(title) LIKE '%' || LOWER($1) || '%' OR LOWER(name) LIKE '%' || LOWER($1) || '%' ORDER BY id DESC LIMIT 1`, [titleStr]);
+              if (r && r.rows && r.rows.length) eid = Number(r.rows[0].id);
+            } catch (_) {}
+          }
+          // 3) Tokenized OR search
+          if (!eid) {
+            try {
+              const toks = String(titleStr).toLowerCase().replace(/[^a-z0-9\s]+/g,' ').split(/\s+/).filter(w => w && w.length >= 3);
+              if (toks.length) {
+                const clauses = [];
+                const params = [];
+                toks.forEach((t) => {
+                  params.push(`%${t}%`);
+                  const p1 = params.length; // index for title pattern
+                  params.push(`%${t}%`);
+                  const p2 = params.length; // index for name pattern
+                  clauses.push(`LOWER(title) LIKE $${p1} OR LOWER(name) LIKE $${p2}`);
+                });
+                const sql = `SELECT id, title FROM events_mysql_mirror WHERE ${clauses.join(' OR ')} ORDER BY id DESC LIMIT 5`;
+                const r = await query(sql, params);
+                if (r && r.rows && r.rows.length) {
+                  // pick the row with most tokens matched (simple scoring)
+                  let best = r.rows[0];
+                  let bestScore = -1;
+                  for (const row of r.rows) {
+                    const title = String(row.title || '').toLowerCase();
+                    let sc = 0; for (const t of toks) { if (title.includes(t)) sc++; }
+                    if (sc > bestScore) { bestScore = sc; best = row; }
+                  }
+                  eid = Number(best.id);
+                }
+              }
+            } catch (_) {}
+          }
+          // 4) MySQL fallback by LIKE
+          if (!eid) {
+            try {
+              const m = await mysqlDb.query(`SELECT id FROM events WHERE LOWER(title)=LOWER(?) OR LOWER(title) LIKE CONCAT('%', LOWER(?), '%') ORDER BY id DESC LIMIT 1`, [titleStr, titleStr]);
               if (m && m.length) eid = Number(m[0].id);
             } catch (_) {}
           }
@@ -1656,7 +1695,36 @@ app.post('/tools/execute', authRequired, async (req, res) => {
           } catch (_) {}
         }
 
-        if (!row) return res.json({ ok:true, found:false, event_id: eid, event_title: eventTitle || null });
+        if (!row) {
+          // Graceful fallback: construct a short summary from event details (mirror → MySQL)
+          let ev = null;
+          try {
+            const r = await query(`SELECT id, title, name, description, learning_objectives, skills_covered, practical_use, start_at FROM events_mysql_mirror WHERE id = $1 LIMIT 1`, [eid]);
+            ev = (r && r.rows && r.rows[0]) || null;
+          } catch (_) { ev = null; }
+          if (!ev) {
+            try {
+              const m = await mysqlDb.query(`SELECT id, title, description, start_at FROM events WHERE id = ? LIMIT 1`, [eid]);
+              ev = (m && m[0]) || null;
+            } catch (_) { ev = null; }
+          }
+          const titleOut2 = (ev && (ev.title || ev.name)) || eventTitle || 'Course';
+          const desc = (ev && ev.description) ? String(ev.description) : '';
+          const lo = ev && ev.learning_objectives ? (typeof ev.learning_objectives === 'string' ? ev.learning_objectives : JSON.stringify(ev.learning_objectives)) : '';
+          const skills = ev && ev.skills_covered ? (typeof ev.skills_covered === 'string' ? ev.skills_covered : JSON.stringify(ev.skills_covered)) : '';
+          const start = ev && ev.start_at ? new Date(ev.start_at) : null;
+          const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+          let when = '';
+          try { if (start) { when = new Intl.DateTimeFormat('en-GB',{ timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(start); } } catch(_) {}
+          const parts = [];
+          parts.push(`<h3 style="margin:0 0 8px">${titleOut2}</h3>`);
+          if (when) parts.push(`<div style="opacity:.8;margin:0 0 8px">Starts: ${when} (${tz})</div>`);
+          if (desc) parts.push(`<p style="line-height:1.55;margin:0 0 10px">${desc}</p>`);
+          if (lo) parts.push(`<div style="margin:10px 0"><strong>Learning objectives</strong><pre style="white-space:pre-wrap">${lo}</pre></div>`);
+          if (skills) parts.push(`<div style="margin:10px 0"><strong>Skills covered</strong><pre style="white-space:pre-wrap">${skills}</pre></div>`);
+          const html = parts.join('\n') || '<div>No details available.</div>';
+          return res.json({ ok:true, found:true, event_id: eid, event_title: titleOut2, summary_html: html, generated: true });
+        }
         const html = String(row.summary_full || row.summary || '').trim();
         return res.json({ ok:true, found:true, event_id: eid, event_title: eventTitle || null, summary_html: html, updated_at: row.updated_at || null });
       } catch (e) {
