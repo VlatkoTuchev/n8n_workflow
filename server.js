@@ -1,6 +1,16 @@
+// [SV1] Imports & setup
 // ====================================================================================================
 // Section: Imports, environment, and shared clients
 // ====================================================================================================
+// File map (quick orientation)
+// - Realtime proxy/token:      /realtime/sdp, /realtime/token
+// - Auth:                      /auth/register, /auth/login, /auth/logout
+// - User/profile/context:      /me, /user/profile, /user/context
+// - Tools (POST /tools/execute): chat, preferences, memory, courses, quizzes, summaries
+// - Sessions:                  /sessions/heartbeat, /sessions/finalize (+ idle summarizer)
+// - Static routes:             /, /login, /signup, assets
+// - Helpers:                   ensureMysqlUserForEmail, composeUserContextSummary,
+//                              summarizeAndSaveSession
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -36,7 +46,8 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ----------------------------------------------------------------------------------------------------
 // Helper: Ensure a corresponding MySQL users row exists for the authenticated email
-// This keeps CDC mirrors (user_mysql_mirror) populated when app_user is created first.
+// Purpose: keep CDC mirrors (user_mysql_mirror) populated when app_user is created first
+// Notes: silently no‑ops if user already exists; never throws intentionally
 async function ensureMysqlUserForEmail(email, nameHint) {
   try {
     if (!email) return;
@@ -55,9 +66,13 @@ async function ensureMysqlUserForEmail(email, nameHint) {
 
 // ====================================================================================================
 // Section: Context composition (reads Postgres mirrors)
-// - Builds a compact, human-readable personalization context for instructions
+// - Builds a compact, human‑readable personalization context for instructions
 // ====================================================================================================
-// Compose a concise, human-readable context summary for the authenticated user
+/**
+ * Compose a concise, human‑readable context summary for the authenticated user
+ * Sources: Postgres mirrors of MySQL domain tables (events, favorites, attempts, etc.)
+ * Output: short multi‑line string used inside the Realtime instructions
+ */
 async function composeUserContextSummary(email, pgUserId) {
   try {
     if (!email) return '';
@@ -202,6 +217,7 @@ function authRequired(req, res, next) {
 // ====================================================================================================
 // Realtime WebRTC SDP exchange proxy to OpenAI (place before static routing)
 // Accept SDP over POST; respond with OpenAI's SDP answer
+// [SV2] Realtime SDP proxy
 app.all('/realtime/sdp', authRequired, async (req, res) => {
   try {
     console.log(`[realtime] ${req.method} /realtime/sdp content-type=${req.headers['content-type']}`);
@@ -256,6 +272,7 @@ app.all('/realtime/sdp', authRequired, async (req, res) => {
 // - Injects Working Memory Pack + user context into instructions
 // ====================================================================================================
 // Mint a fresh ephemeral token using the permanent API key
+// [SV3] Realtime token minting
 app.all('/realtime/token', authRequired, async (req, res) => {
   try {
     console.log(`[realtime] ${req.method} /realtime/token`);
@@ -452,7 +469,7 @@ Environment: Voice‑first in the Compenion AI web app. Speak clearly. Keep turn
 
 Tone: Warm, human, a bit playful. Use brief affirmations ("Got it", "I see"). Small fillers are okay in moderation. Use short pauses with "..." to pace speech. Encourage, never lecture.
 
-Primary goal: Help the learner move forward in their studies. Use memory (facts, preferences, goals, progress, open questions), recent summaries, and excerpts to personalize. On a fresh session, greet first and ask where they want to focus; only continue prior threads after they confirm.
+Primary goal: Help the learner move forward in their studies. Use memory (facts, preferences, goals, progress, open questions), recent summaries, and excerpts to personalize. On a fresh session, run the onboarding flow FIRST (language choice → 5 short questions). Only after onboarding (or when already completed) continue with goals/topics.
 
 Assistance framework:
 1) Initial classification
@@ -521,6 +538,18 @@ Date/time accuracy (strict):
    - Do NOT recompute, translate, or guess dates from titles or summaries. If any doubt, call get_event_details again before speaking.
    - Always include the relative start (item.starts_in_human) when available (e.g., “in 6 days”).
 
+Onboarding (first session only; required):
+   - Purpose: collect a few short answers to personalize guidance and recommend the best courses. Say this plainly in the first line.
+   - Flow (one question per turn; wait for the user’s answer each time; keep it natural and dynamic; provide 2–3 example answers, not full option lists; after each answer, immediately persist it using add_user_memory and then ask the next question):
+      1) Language choice: Ask “Would you like to continue in English or switch languages?” Offer examples in the line (e.g., Macedonian, Albanian, Serbian, Greek). If a language is already saved, confirm they want to keep it; if they choose another, call set_preferred_language and continue in that language.
+      2) Primary outcome with AI (goal): examples — “Automate repetitive tasks”, “Improve team performance”, “Learn AI from scratch”. Save with type:"goal".
+      3) Work area (role/domain): examples — “Leadership/Management”, “Sales & Business Dev”, “Tech/IT/Data”. Save with type:"fact".
+      4) Current AI level: examples — “beginner”, “sometimes use AI at work”, “advanced workflows”. Save with type:"fact".
+      5) Why now (motivation): examples — “better opportunities”, “increase income”, “stay competitive”. Save with type:"preference".
+      6) Monthly learning pace: examples — “light (2/mo)”, “standard (4/mo)”, “intensive (8/mo)”. Save with type:"preference".
+   - After Q6, briefly recap (one line) and immediately list 3 upcoming in‑platform courses matched to their topic/level (use list_courses/recommend_courses + get_event_details for dates). Offer to open a summary or mark attendance.
+   - Do NOT move to general chat until you collect at least one answer for each of the 6 questions above (use get_user_memory to see what’s missing). Be encouraging but brief.
+
 Proactive course guidance (reduce churn):
    - When the learner mentions a goal, blocker, or interest (even implicitly), gently steer toward a relevant upcoming course on this platform.
    - Action pattern (voice first, keep it natural and short):
@@ -585,8 +614,12 @@ Safety & inclusion: Be culturally respectful; avoid probing sensitive info; norm
 
     const insParts = [
       baseInstructions,
+      // Hard onboarding gate inserted early so it doesn't get overridden by later guidance
+      `Top Priority — Onboarding Gate:\n- You must treat onboarding as REQUIRED when starting a new session or when answers are missing.\n- Required order:\n  0) Language choice — Ask if they prefer English or another language (examples: Macedonian, Albanian, Serbian, Greek). Wait for the answer; if they choose another, call set_preferred_language and continue in that language.\n  1) Primary outcome with AI (save as goal).\n  2) Work area / domain (save as fact).\n  3) Current AI level (save as fact).\n  4) Why now / motivation (save as preference).\n  5) Monthly learning pace (save as preference).\n- One question per turn. After each answer, immediately call add_user_memory with { type, statement }.\n- Do NOT proceed to general topics or recommendations until all five answers are captured. After the last answer, list 2–3 upcoming matching courses and offer to open a summary or mark attendance.`,
       continuityBlock,
-      (preferredLanguage ? `Language Policy:\n- RESPOND ONLY IN ${preferredLanguage}.\n- Do NOT switch languages unless the user explicitly asks to change language.\n- If the user asks to change, briefly confirm, call set_preferred_language, and continue in the new language immediately thereafter.\n- If incoming speech is in a different language, ask a one-line confirmation before switching.` : null),
+      (preferredLanguage
+        ? `Language Policy:\n- First‑turn exception: confirm you can continue in ${preferredLanguage} or offer to switch (e.g., Macedonian, Albanian, Serbian, Greek). If they choose another, call set_preferred_language and continue in that language.\n- RESPOND ONLY IN ${preferredLanguage} after language choice is confirmed.\n- Do NOT switch languages unless the user explicitly asks to change language.\n- If the user asks to change, briefly confirm, call set_preferred_language, and continue in the new language immediately thereafter.\n- If incoming speech is in a different language, ask a one-line confirmation before switching.`
+        : `Language Policy (no preference saved):\n- On the very first turn you MUST ask: “Would you like to continue in English, or switch languages?” Offer examples inline (e.g., Macedonian, Albanian, Serbian, Greek).\n- Wait for the answer. If they choose a language, call set_preferred_language and then continue the onboarding in that language.\n- Until a choice is made, speak in English.`),
       `Current date/time (${tz}): ${nowLocal}`,
       `Current date/time (UTC): ${nowIso}`
     ];
@@ -605,14 +638,15 @@ Safety & inclusion: Be culturally respectful; avoid probing sensitive info; norm
         `Guidance: These are the last conversations that you and ${userDisplayName || 'the user'} had in the previous session. Smoothly continue from there with variety and light humor. Do not restate the entire memory.`
       );
     } else {
+      // NEW USER FIRST-TURN SCRIPT: language choice + onboarding notice
       insParts.push(
-        `Guidance: There is no prior conversation for this user. START FRESH.
-Welcome policy (FIRST CONTACT ONLY):
-- Sound genuinely excited and warm.
-- Introduce yourself with a friendly, memorable name (e.g., “Hi! I’m Nova—your learning companion”).
-- Explicitly offer to change your name if the user prefers (“If you want me to go by a different name, just tell me”).
-- In 1–2 short sentences, give an upbeat welcome and invite a first step or question.
-- Keep it natural—avoid stock phrases like “Hi there,” and vary the opening line.`
+        `First contact (no prior session):
+- Greet warmly in English and introduce yourself briefly (1 sentence).
+- Ask a clear question about language: “Would you like to continue in English, or switch to another language?” Give 3–5 examples in the same line (e.g., Macedonian, Albanian, Serbian, Greek, German).
+- Wait for the user's answer. If they choose a language, call set_preferred_language and then continue in that language for the rest of onboarding.
+- Tell them explicitly: “I’ll ask a few short questions to tailor your learning journey and help with real day‑to‑day tasks.”
+- Then ask the first onboarding question (Primary outcome with AI) with 2–3 example answers (no full option lists). After they answer, persist it with add_user_memory(type:"goal").
+- Keep each turn short and engaging; avoid filler or long descriptions.`
       );
     }
     // If available, include a strict continuation anchor from the user's last message
@@ -620,7 +654,7 @@ Welcome policy (FIRST CONTACT ONLY):
       const tag = anchorWhenLocal ? `[${anchorWhenLocal}]` : '';
       insParts.push(`Continuation anchor (for follow‑up after first turn):\n- Last user message ${tag}: \"${anchorText}\"\n- Use this anchor to continue ONLY after the learner confirms they want to resume. Do NOT use it on the very first response.`);
     } else {
-      insParts.push(`If no explicit last-user anchor is available:\n- Do NOT assume prior topics.\n- Ask ONE short clarifying question to locate where to continue (e.g., “Want to pick up from our last topic or start fresh?”).`);
+      insParts.push(`If no explicit last-user anchor is available:\n- If this is a first session or onboarding answers are still missing, IGNORE this and run onboarding as specified above.\n- Otherwise, do NOT assume prior topics. Ask ONE short clarifying question to locate where to continue (e.g., “Want to pick up from our last topic or start fresh?”).`);
     }
     // Add recency-aware and post-reload + refresh-count greeting guidance (placed after core guidance to override tone)
     try {
@@ -659,7 +693,7 @@ Welcome policy (FIRST CONTACT ONLY):
       lines.push('- Vary openings across sessions; avoid repeating phrasing. Keep it fresh and human.');
       // Enforce a concrete first-turn behavior to avoid jumping into mid-topic
       lines.push('- FIRST SENTENCE MUST be a brief, natural greeting (use the learner’s display name if provided). Never start mid-task, with tool requests, or with device/mic checks.');
-      lines.push('- On the very first turn: do NOT reference prior content. Ask ONE short question: “Continue where we left off or start something new?” and wait for the user’s preference.');
+      lines.push('- On the very first turn: If this is a first session or onboarding answers are missing, run the onboarding script (language choice → 5 short questions). Otherwise, do NOT reference prior content and ask ONE short question: “Continue where we left off or start something new?”.');
       lines.push('- If the learner explicitly asks “what did we last talk about?”, answer with a 1–2 line summary drawn ONLY from the most recent excerpt, then ask a single follow‑up question.');
       insParts.push(lines.join('\n'));
     } catch (_) {}
@@ -686,6 +720,7 @@ Welcome policy (FIRST CONTACT ONLY):
       }
     } catch (_) {}
 
+    // POST /realtime/sessions with short retry + timeout. Kept local to token route.
     async function postSessionWithRetry(payload, attempts = 2) {
       let lastErr = null;
       const timeoutMs = Math.max(3000, Number(process.env.REALTIME_TOKEN_TIMEOUT_MS || 10000));
@@ -739,6 +774,7 @@ Welcome policy (FIRST CONTACT ONLY):
 // - Bridges identities across Postgres app_user and MySQL users/registrants
 // ====================================================================================================
 // Register: creates MySQL registrant + user, and Postgres app_user (bridged)
+// [SV4] Auth (register/login/logout)
 app.post('/auth/register', async (req, res) => {
   try {
     const { name, email, password, phone } = req.body || {};
@@ -871,6 +907,7 @@ app.post('/auth/logout', async (req, res) => {
 // ====================================================================================================
 // Section: Me and profile endpoints (MySQL + Postgres mirrors)
 // ====================================================================================================
+// [SV5] Me/Profile/Context
 app.get('/me', authRequired, (req, res) => {
   res.json({ ok: true, ...req.user });
 });
@@ -1050,6 +1087,7 @@ app.get('/user/context', authRequired, async (req, res) => {
 // Section: Health
 // ====================================================================================================
 // Health check for Postgres and Redis
+// [SV6] Health
 app.get('/health', async (_req, res) => {
   try {
     await connectRedis();
@@ -1066,6 +1104,7 @@ app.get('/health', async (_req, res) => {
 // Section: Tool execution endpoint (user memory + KB + preferences)
 // ====================================================================================================
 // Tool execution endpoint (user memory + KB + preferences)
+// [SV7] Tools API
 app.post('/tools/execute', authRequired, async (req, res) => {
   try {
     const { name, arguments: args } = req.body || {};
@@ -1875,26 +1914,7 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       }
     }
 
-    if (toolName === 'get_user_profile') {
-      // Fetch the authenticated user's profile from MySQL (name, email, plus basic extras)
-      const email = (req.user && req.user.email) || null;
-      if (!email) return res.status(400).json({ error: 'No email on token' });
-      const rows = await mysqlDb.query(
-        `SELECT id,name,email,created_at,updated_at FROM users WHERE email=? LIMIT 1`,
-        [email]
-      );
-      if (!rows || rows.length === 0) return res.status(404).json({ error: 'Profile not found' });
-      const u = rows[0];
-      let extras = null;
-      try {
-        const d = await mysqlDb.query(
-          `SELECT onboarding_step,avatar,ai_avatar,onboarding_completed_at FROM user_data WHERE user_id=? LIMIT 1`,
-          [u.id]
-        );
-        if (d && d.length) extras = d[0];
-      } catch (_) {}
-      return res.json({ ok: true, profile: { id: u.id, name: u.name, email: u.email, created_at: u.created_at, updated_at: u.updated_at, ...(extras || {}) } });
-    }
+    // Removed unused tool 'get_user_profile' — the client calls GET /user/profile directly.
 
     return res.status(404).json({ error: 'Unknown tool', name: toolName });
   } catch (e) {
@@ -1931,10 +1951,15 @@ app.post('/tools/admin/delete_memories', async (req, res) => {
 // ====================================================================================================
 // Section: Static assets and HTML routes
 // ====================================================================================================
+// [SV9] Static routes
 // Serve node_modules for browser ESM imports (read-only)
+// Dev convenience: expose node_modules for ESM demos (not required for app runtime).
+// Safe to remove or guard by NODE_ENV in production.
 app.use('/node_modules', express.static(path.join(__dirname, 'node_modules')));
 
 // Serve the entire workspace statically so GLB and HTML can be loaded via HTTP
+// Serve workspace for GLB/worklets during development. In production, prefer explicit
+// mounts (e.g., app.use('/public', express.static(...))) to avoid exposing the repo root.
 app.use(express.static(__dirname));
 
 // Friendly routes for explicit login/signup pages
@@ -1958,17 +1983,22 @@ app.get('/', (req, res) => {
 });
 
 // Lightweight demo webhook
-app.post('/webhook', (req, res) => {
-  const message = (req.body && req.body.message) || '';
-  const reply = message ? `You said: ${message}` : 'Hello! I am listening.';
-  res.json({ response: reply });
-});
+// (Removed) Lightweight demo webhook endpoint previously used for quick echo tests.
+// If needed again, re‑introduce a minimal handler or use /health.
 
 // ====================================================================================================
 // Section: Summarization pipeline (finalization)
 // - Builds cumulative summary, extracts atomic items, rebuilds digest
 // ====================================================================================================
+// [SV10] Summarization pipeline
 async function summarizeAndSaveSession(sessionId, userId) {
+  // Build a durable summary and memory from the latest conversation.
+  // Steps:
+  // 1) Load transcript (prefer aggregated chat_message JSON → Redis buffer → row log)
+  // 2) Ask OpenAI for a cumulative summary
+  // 3) Upsert chat_session_summary
+  // 4) Extract atomic memory items (facts/preferences/etc.) and upsert user_memory
+  // 5) Rebuild short rolling digest (user_digest)
   console.log('[summary] summarizeAndSaveSession:start', { sessionId, userId });
   // 1) Prefer aggregated JSON from chat_message for this session
   let transcript = '';
@@ -2100,6 +2130,7 @@ async function summarizeAndSaveSession(sessionId, userId) {
   return { saved: true, id: saved.id, summary: saved.summary };
 }
 // Keep-alive during active sessions (used by idle summarizer)
+// [SV11] Sessions (heartbeat/finalize)
 app.post('/sessions/heartbeat', authRequired, async (req, res) => {
   try {
     const { sessionId } = req.body || {};
@@ -2153,6 +2184,7 @@ app.post('/sessions/finalize', authRequired, async (req, res) => {
 // - Finalizes sessions after inactivity with backoff on failure
 // ====================================================================================================
 // Idle summarizer (enabled by default; set ENABLE_IDLE_SUMMARIZER=false to disable)
+// [SV12] Idle summarizer & startup
 if (String(process.env.ENABLE_IDLE_SUMMARIZER || 'true').toLowerCase() !== 'false') {
   // 60s default idle window
   const IDLE_MS = Math.max(60_000, Number(process.env.SESSION_IDLE_MS || 60_000));

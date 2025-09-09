@@ -1,5 +1,6 @@
 // ====================================================================================================
 // Section: Imports and shared helpers
+// - Retrieval layer for Postgres. See docs/CODE_OVERVIEW.md → "Postgres helpers — retrieval.js".
 // ====================================================================================================
 const { query, pool } = require('./db');
 const crypto = require('crypto');
@@ -9,6 +10,7 @@ const { embedText } = require('./embed');
 // Section: Chat sessions and messages
 // - Session header and single-row JSON message storage per (session_id,user_id)
 // ====================================================================================================
+// [RT1] Sessions & messages
 async function createChatSession({ userId, title }) {
   const res = await query(
     `INSERT INTO chat_session (user_id, title) VALUES ($1, $2) RETURNING id`,
@@ -20,6 +22,11 @@ async function createChatSession({ userId, title }) {
 // addSpokenLanguage removed
 
 // ---------- Chat message persistence (single row per session_id,user_id with JSON conversation) ----------
+/**
+ * Append a turn to the aggregated JSON array in chat_message for (session_id,user_id).
+ * Stored per item: role ('user'|'model'), text, UTC ISO time (at), epoch ms (ts),
+ * timezone label (tz), formatted local time (at_local), and a computed assistant turn.
+ */
 async function addChatMessage({ sessionId, userId, role, content }) {
   const sid = sessionId || null;
   const uid = userId || null;
@@ -85,6 +92,8 @@ async function addChatMessage({ sessionId, userId, role, content }) {
 
 // ====================================================================================================
 // Section: Summaries and preferences (Postgres)
+// - chat_session_summary holds the cumulative session summary used for continuity
+// - user_language stores a single preferred language per user
 // ====================================================================================================
 async function getRecentMessages({ sessionId, n = 50 }) {
   const res = await query(
@@ -98,6 +107,7 @@ async function getRecentMessages({ sessionId, n = 50 }) {
   return res.rows;
 }
 
+// [RT2] Summaries & preferences
 async function saveSessionSummary({ sessionId, userId, summary }) {
   const res = await query(
     `INSERT INTO chat_session_summary (session_id, user_id, summary, updated_at)
@@ -145,7 +155,10 @@ async function setPreferredLanguagePg({ userId, language }) {
 
 // ====================================================================================================
 // Section: Users + Knowledge Base (KB)
+// - Lightweight KB for small text corpora using pgvector
+// - Default embeddings: text-embedding-3-small (1536 dims), configured in embed.js
 // ====================================================================================================
+// [RT3] Users & KB
 async function createUser({ email }) {
   const res = await query(
     `INSERT INTO app_user (email) VALUES ($1)
@@ -249,8 +262,10 @@ module.exports = {
 
 // ====================================================================================================
 // Section: Lean memory tables & helpers
-// - user_memory and user_digest support atomic memory and rolling digest
+// - user_memory: atomic items ranked by pinned → stability → recency
+// - user_digest: short rolling digest for voice session personalization
 // ====================================================================================================
+// [RT4] Memory & agent settings
 async function ensureMemoryTables() {
   await query(`
     CREATE TABLE IF NOT EXISTS user_memory (

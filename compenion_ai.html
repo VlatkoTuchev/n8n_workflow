@@ -6,6 +6,17 @@
     <title>Course Finder Buddy - Your AI Learning Companion</title>
     <link rel="stylesheet" href="/auth.css" />
     <script src="/auth-bg.js" defer></script>
+    <!-- See docs/CODE_OVERVIEW.md#client-functions for per‑function explanations -->
+    <!--
+      File map (quick orientation)
+      - Styles: layout, cards, 3D layer, quiz/summary modals, code‑assist panel
+      - Header: title + mic toggle + logout
+      - Main content: dynamic course grid and panels injected by tools
+      - 3D Avatar Layer: Three.js scene + GLB animations (walk/dance/boxing)
+      - Realtime WebRTC: token minting, SDP exchange, mic capture, audio playout
+      - Tool wiring: functions the model can call (courses, memory, language, avatar, code‑assist, quiz, summaries)
+      - Session lifecycle: heartbeats, idle finalizer, unload/visibility finalize, logout
+    -->
     <style>
         :root {
             /* Ensure quiz button gradient has both stops available */
@@ -334,6 +345,7 @@
 
     <script>
         // ====================================================================================================
+        // ---- Section 1 START: 3D Avatar
         // Section: 3D Avatar (Three.js)
         // - Loads GLB animations and exposes simple controls via window.AvatarController
         // ====================================================================================================
@@ -348,6 +360,7 @@
             const container = document.getElementById('threeAvatarLayer');
             if (!container) return;
 
+            // [CA1.1] Scene, camera, lights
             const renderer = new WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
             renderer.setSize(container.clientWidth, container.clientHeight);
@@ -375,6 +388,7 @@
             ground.position.y = 0;
             scene.add(ground);
 
+            // [CA1.2] Asset loading and normalization helpers
             const loader = new GLTFLoader();
             const assetsBase = '/public/assets/';
 
@@ -392,6 +406,7 @@
             let walkRoot = null, walkClip = null;
             let danceClip = null;
             let boxingClip = null;
+            // [CA1.3] Animation mixer & crossfades
             const nameToAction = {};
             function crossFadeTo(actionName, fade = 0.35) {
                 const next = nameToAction[actionName];
@@ -449,6 +464,7 @@
                 avatarRoot.rotation.y += (targetY - avatarRoot.rotation.y) * 0.2;
             }
 
+            // [CA1.4] Autonomy & bounds
             const bounds = { minX: -6.0, maxX: 6.0, minY: -1.5, maxY: 3.0 };
             let velocityX = 0.4; // default walking speed
             let behavior = 'walk';
@@ -478,6 +494,7 @@
                 else pendingMode = 'walk';
             }
 
+            // [CA1.5] Drag interaction
             (function enableAvatarDragging() {
                 const getVisibleDims = () => {
                     const vFovRad = MathUtils.degToRad(camera.fov);
@@ -519,6 +536,7 @@
                 window.addEventListener('blur', () => { isMouseDraggingAvatar = false; });
             })();
 
+            // [CA1.8] Resize handling
             function onResize() {
                 const w = container.clientWidth; const h = container.clientHeight;
                 renderer.setSize(w, h);
@@ -561,6 +579,7 @@
                 (e) => { console.warn('Failed to load base model', e); animate(); }
             );
 
+            // [CA1.7] Frame loop
             let last = performance.now();
             function animate() {
                 const now = performance.now(); const dt = now - last; last = now;
@@ -571,6 +590,7 @@
 
             // Expose safe control functions for external callers (Realtime tools)
             // These methods close over the internal avatar state but are accessible via window.
+            // [CA1.6] Public control API
             window.AvatarController = {
                 setWalk: () => {
                     startWalking();
@@ -598,12 +618,15 @@
             };
         })();
         
+        // ---- Section 1 END: 3D Avatar
         // ====================================================================================================
         // Section: OpenAI Realtime WebRTC - Auto start on load
+        // ---- Section 2 START: OpenAI Realtime (WebRTC, tools, UI)
         // - Creates RTCPeerConnection, configures tools, manages greeting + VAD
         // ====================================================================================================
         async function startOpenAIRealtime() {
             try {
+                // [CA2.1] PeerConnection & DataChannel
                 const pc = new RTCPeerConnection({
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' }
@@ -632,7 +655,7 @@
                     }
                 };
 
-                // Audio envelope bubble via AudioWorklet (fallback to Analyser RMS)
+                // [CA2.2] Audio envelope bubble via AudioWorklet (fallback to Analyser RMS)
                 const bubbleEl = document.getElementById('bubble');
                 const MOODS = { calm:'#4da3ff', excited:'#ffd166', nervous:'#ff5e57', neutral:'#9aa2ad' };
                 function setMood(mood){ const c = MOODS[mood] || MOODS.neutral; try { bubbleEl.style.setProperty('--color', c); } catch(_){} }
@@ -725,8 +748,7 @@
                 dc.onerror = (e) => console.warn('DataChannel error:', e);
                 dc.onclose = () => console.log('DataChannel closed');
 
-                // Mic
-                // Microphone capture + toggle wiring
+                // [CA2.3] Microphone capture + toggle wiring
                 try {
                     const mic = await navigator.mediaDevices.getUserMedia({
                         audio: { echoCancellation: true, noiseSuppression: true },
@@ -747,7 +769,7 @@
                     try { const mb = document.getElementById('muteBtn'); if (mb) { mb.disabled = true; mb.title = 'Microphone unavailable'; } } catch(_) {}
                 }
 
-                // Fetch ephemeral session token so the model receives memory/context in instructions
+                // [CA2.4] Token minting and SDP exchange
                 let openAiSessionToken = '';
                 let hasHistory = true;
                 let sessionPreferredVoice = null;
@@ -835,7 +857,7 @@
                 // Apply server-selected voice once channel is ready (no-op if unchanged)
                 try { if (sessionPreferredVoice) dc.send(JSON.stringify({ type: 'session.update', session: { voice: sessionPreferredVoice } })); } catch (_) {}
 
-                // Tools to control the avatar from the model
+                // [CA2.5] Tools registry
                 const tools = [
                     {
                         type: 'function',
@@ -879,7 +901,7 @@
                             additionalProperties: false
                         }
                     },
-                    // record_negation removed
+                    
                     
                     {
                         type: 'function',
@@ -1059,7 +1081,7 @@
                     return 'local-demo-session';
                 }
 
-                // Heartbeat to keep session active for idle summarizer
+                // [CA2.8] Heartbeat to keep session active for idle summarizer
                 setInterval(async () => {
                     try {
                         const uid = await getUserId();
@@ -1073,6 +1095,7 @@
                     } catch (_) {}
                 }, 30000);
 
+                // [CA2.9] Pacing & safety controls; argument accumulation
                 // Accumulate streamed tool/function arguments by call_id
                 const pendingArgs = Object.create(null);
                 let lastTranscript = '';
@@ -1090,7 +1113,7 @@
                 let assistantTextBuf = '';
                 let pendingPreferredLanguage = null;
                 const processedToolCallIds = new Set();
-                let responseRequested = false; // NEW: prevents double response.create
+                let responseRequested = false; // prevents double response.create
                 let lastFillerMs = 0; // debounce filler speech
                 let pendingRefreshNotice = false; // Ask user to refresh after settings change
                 // Quiz state
@@ -1453,6 +1476,7 @@
                 // On load: after user id is available, show launcher if this user has saved content
                 (async () => { try { const uid = await getUserId(); if (sessionStorage.getItem(caKey('code_assist_blocks')) || sessionStorage.getItem(caKey('code_assist_last'))) ensureCodeAssistLauncher().style.display='grid'; } catch(_) {} })();
 
+                // [CA2.6] Tool handler & UI integrations
                 const toolHandler = async (evt) => {
                     try {
                         const msg = JSON.parse(evt.data);
@@ -1476,7 +1500,7 @@
                         // Drop audio delta spam
                         if (msg.type === 'response.error') {
                             console.warn('[Response error]', msg);
-                            responseRequested = false; // NEW
+                            responseRequested = false;
                         }
                         if (msg.type === 'error') {
                             console.error('Realtime error payload:', msg);
@@ -1485,8 +1509,10 @@
                         if (msg.type === 'response.created') { isResponseActive = true; responseRequested = false; } // UPDATED
                         if (msg.type === 'response.done') {
                             isResponseActive = false;
-                            responseRequested = false; // NEW
+                            responseRequested = false;
                             resetIdleTimer();
+                            // If we were waiting for the user's language choice, allow the assistant to respond now
+                            try { if (awaitingLanguageChoice) awaitingLanguageChoice = false; } catch (_) {}
                             // Restore tool usage if we temporarily disabled it for follow-up
                             if (toolFollowupLock) {
                                 toolFollowupLock = false;
@@ -1552,6 +1578,7 @@
                         }
                         if ((msg.type === 'input_audio_buffer.speech_stopped' || msg.type === 'conversation.item.input_audio_transcription.completed') && !isResponseActive) {
                             if (!initialGreetingDone) return; // do not auto-respond until greeting finishes
+                            if (awaitingLanguageChoice) return; // wait for language choice before continuing
                             const now = Date.now();
                             if (!hadUserSpeechInWindow || (now - lastUserSpeechMs) > 1500) return; // only respond to fresh user speech
                             if (!responseCreatePending && now - lastResponseCreateMs > 800) {
@@ -2125,6 +2152,7 @@
                     } catch (_) { return null; }
                 }
 
+                // [CA2.7] Greeting & onboarding helpers
                 (async () => {
                     greetingInProgress = true;
                     const uid = await getUserId();
@@ -2137,16 +2165,16 @@
                     // STEP 2: if the user is brand-new (no history), auto-introduce; else wait for user
                     const parts = [];
                     if (ctx.preferredLanguage) {
-                        parts.push(`Speak strictly in ${ctx.preferredLanguage} for this greeting (do not switch languages mid-turn). Use this language as output_language.`);
+                        parts.push(`Language choice (first line): Confirm you can continue in ${ctx.preferredLanguage}, or offer to switch (examples: Macedonian, Albanian, Serbian, Greek or any other language that the user prefers). IMPORTANT: Ask ONLY this question now and WAIT for their answer before proceeding. If they choose another language, call set_preferred_language and continue in that language.`);
                         currentPreferredLanguage = ctx.preferredLanguage;
                     } else {
-                        parts.push('Speak strictly in English for this greeting (do not switch languages mid-turn). Use this language as output_language.');
+                        parts.push('Language choice (first line): Ask if they want to continue in English or switch languages (examples: Macedonian, Albanian, Serbian, Greek). IMPORTANT: Ask ONLY this question now and WAIT for their answer before proceeding. Until they choose, speak in English. If they choose, call set_preferred_language and continue in that language.');
                         currentPreferredLanguage = 'English';
                     }
                     // The server has already provided digest/memory in instructions. Use exactly one relevant detail if helpful.
                     const greetLine = ctx.userName
-                        ? `Start with a brief, natural greeting using the learner’s name: ${ctx.userName}.`
-                        : 'Start with a brief, natural greeting; if you do not know the name, you may ask it in one short sentence.';
+                        ? `OPEN ENERGETIC INTRO: Start with a energetic and motivational happy greeting, upbeat one‑liner that uses the learner’s name (e.g., “Hey ${ctx.userName}, nice to meet you!”). Immediately introduce yourself by name (e.g., “I’m Nova”), in the same line. Keep it friendly and motivating (≤1 sentence).`
+                        : 'OPEN ENERGETIC INTRO: Start with a energetic and motivational happy greeting, upbeat one‑liner and immediately introduce yourself by name (e.g., “I’m Nova”). Keep it friendly and motivating (≤1 sentence). If you do not know the name, you may ask it in one short sentence.';
                     parts.push(greetLine);
                     if (wasPostSettingsReload) {
                         const why = (postSettingsReloadWhy || '').toLowerCase();
@@ -2156,7 +2184,7 @@
                         responseRequested = true;
                         dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: parts.join(' ') } }));
                     } else if (!hasHistory) {
-                        parts.push('FIRST-CONTACT INTRO: RESPOND ONLY IN ENGLISH for this greeting. Do NOT switch languages mid-turn or afterward unless the user explicitly asks to change languages. Sound upbeat, motivating, and playfully humorous, pleasant, entertaining voice. Open with energy; introduce yourself with a friendly name (e.g., “I’m Nova”) and immediately offer to change it if they prefer in NOT so direct way. Mention you can switch to ANY language on request and that you’ll be their personal assistant here—discovering courses, checking upcoming events, recapping sessions, setting preferences and name, and fetching chat history when needed. Make the best first impression with a lively, memorable tone. End with one personable, open question to learn something about them (a hobby or current learning goal). Use 3–4 short sentences. Never begin with “Hi there” or “Hello there.”');
+                        parts.push('FIRST CONTACT (run onboarding): After the energetic self‑intro and the language choice question above, explicitly say: “I’ll ask a few short questions to tailor your learning journey and help with real day‑to‑day tasks.” Then ask the first onboarding question: “What do you want to figure out with AI first?” Give 2–3 examples (e.g., “Automate repetitive tasks”, “Improve team performance”, “Learn AI from scratch”). After they answer, call add_user_memory with type:"goal" and the short statement, then ask the next onboarding question. Do not ask about hobbies or other smalltalk.');
                         initialGreetingSent = true;
                         responseRequested = true;
                         dc.send(JSON.stringify({
@@ -2209,6 +2237,9 @@
             }
         }
 
+        // ---- Section 2 END: OpenAI Realtime (WebRTC, tools, UI)
+        // ---- Section 3 START: Bootstrapping (DOMContentLoaded handlers)
+        // [CA3.1] Startup sequence
         window.addEventListener('DOMContentLoaded', async () => {
             startOpenAIRealtime();
             // pre-create user + session for logging (avoid overwriting existing sessionId)
@@ -2216,6 +2247,7 @@
             if (uid && !getSessionId()) { await startNewSessionForUser(uid); }
             const btn = document.getElementById('logoutBtn');
             if (btn) {
+                // [CA3.2] Logout finalize & redirect
                 btn.addEventListener('click', async (e) => {
                     try { e.preventDefault(); } catch (_) {}
                     try {
@@ -2234,6 +2266,7 @@
                 });
             }
             // Mute/unmute toggle
+            // [CA3.3] Mute toggle wiring
             (function setupMuteToggle(){
                 const mb = document.getElementById('muteBtn');
                 if (!mb) return;
@@ -2261,7 +2294,7 @@
                     } catch(_) { /* noop */ }
                 });
             })();
-            // Background session summary on page exit
+            // [CA3.4] Background session summary on page exit
             let finalizationInProgress = false;
             let finalizationCompleted = false;
             const summarizeAndSave = async () => {
@@ -2309,6 +2342,7 @@
             window.addEventListener('beforeunload', summarizeAndSave);
             window.addEventListener('unload', summarizeAndSave);
         });
+        // ---- Section 3 END: Bootstrapping (DOMContentLoaded handlers)
     </script>
 </body>
 </html>

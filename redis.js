@@ -1,7 +1,9 @@
 // ====================================================================================================
 // Section: Redis client and chat buffers
 // - Provides minimal chat buffering and session activity tracking for idle summarization
+// - See docs/CODE_OVERVIEW.md → "Redis helpers — redis.js".
 // ====================================================================================================
+// [RD1] Redis client & connection
 const { createClient } = require('redis');
 
 const redis = createClient({ url: process.env.REDIS_URL });
@@ -22,6 +24,10 @@ async function connectRedis() {
 // ----------------------------------------------------------------------------------------------------
 // Chat buffer operations
 // ----------------------------------------------------------------------------------------------------
+// [RD2] Chat buffers
+// Keys:
+//  - chat:<sessionId> = JSON array items (role, content, ts)
+//  - chat:last_activity:<sessionId> = epoch ms
 async function addChatTurn(sessionId, role, content) {
   await connectRedis();
   const maxItems = Math.max(1, Number(process.env.CHAT_BUFFER_MAX || 500));
@@ -50,6 +56,10 @@ async function getFullChat(sessionId) {
 // ----------------------------------------------------------------------------------------------------
 // Session activity tracking (used by idle summarizer)
 // ----------------------------------------------------------------------------------------------------
+// [RD3] Session activity
+// Keys:
+//  - chat:last_activity:<sessionId>
+//  - chat:session_user:<sessionId> = Postgres user id (for summarizer attribution)
 async function setSessionActivity(sessionId, userId) {
   await connectRedis();
   const ttlSeconds = Math.max(60, Number(process.env.CHAT_BUFFER_TTL_SECONDS || 24 * 60 * 60));
