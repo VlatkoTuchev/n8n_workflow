@@ -135,3 +135,12 @@ Flow recap
 3. Subsequent turns come from tools or more `response.create` messages, each producing the stream of `response.*` events until `response.done`.
 
 Persistence during realtime: After each user transcript and after an assistant reply finishes, the client calls `POST /tools/execute` with `{ name: 'add_chat_turn', arguments: { sessionId, role, content } }`. The server appends the turn to Redis list `chat:<sessionId>` (kept to the last `CHAT_BUFFER_MAX` items and expiring after `CHAT_BUFFER_TTL_SECONDS`) and simultaneously mirrors it to Postgres by updating the single aggregated JSON row in `chat_message` for `(session_id, user_id)`. It also refreshes `chat:last_activity:<sessionId>` so the idle summarizer can detect inactivity. Redis provides a fast, lossy buffer for recent context; Postgres is the durable source read later by `summarizeAndSaveSession`.
+
+### System prompt vs per‑turn browser prompts (and exports)
+- System prompt (server‑side): Built in `server.js` when minting `/realtime/token`. It combines static guidelines with dynamic user context (preferred language, agent settings, working memory, recent summaries, and the last conversation anchor). This becomes the session’s baseline “system” role and influences all turns.
+- Browser per‑turn prompts (client‑side): Short, situational instructions sent by `compenion_ai.html` via `response.create` (e.g., greeting/onboarding nudges, “read 2–3 items”, quick follow‑ups after tools). These affect only the next reply and do not replace the baseline.
+- Tool outputs: The browser may inject structured results using `conversation.item.create` with `type:'function_call_output'`. These JSON payloads are visible to the model and count toward tokens for that turn.
+- Token accounting: For any reply, the model’s input = baseline system prompt + current per‑turn instructions (if any) + injected tool outputs (if any) + the user’s text/transcript.
+- Exports for auditing: The script `scripts/export_user_prompts.js` writes:
+  - Per‑user prompt snapshots to `scripts/exports/user_prompts/<email>.txt` (baseline snapshot, onboarding gate, language policy, user context summary, working memory pack, recent summary, and the last conversation’s full transcript with a continuation anchor).
+  - A shared baseline file to `scripts/exports/system_instructions/system_instructions.txt` (static rules common to all users). Ephemeral client per‑turn prompts are not exported since they vary each turn at runtime.

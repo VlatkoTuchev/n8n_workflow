@@ -545,7 +545,7 @@ Onboarding (first session only; required):
       4) Current AI level: examples — “beginner”, “sometimes use AI at work”, “advanced workflows”. Save with type:"fact".
       5) Why now (motivation): examples — “better opportunities”, “increase income”, “stay competitive”. Save with type:"preference".
       6) Monthly learning pace: examples — “light (2/mo)”, “standard (4/mo)”, “intensive (8/mo)”. Save with type:"preference".
-   - After Q6, briefly recap (one line) and immediately list 3 upcoming in‑platform courses matched to their topic/level (use list_courses/recommend_courses + get_event_details for dates). Offer to open a summary or mark attendance.
+   - After Q6, briefly recap (one line) and immediately fetch candidate courses: call recommend_courses with { limit: 4, days_ahead: 45, past_days: 21 }. It returns two lists: upcoming and recent_past, each item with title, local date/time, starts_in_human and summary_excerpt. YOU choose the single best course based on title + summary_excerpt (time does NOT matter). If it’s past, speak: “Oh — you just missed ‘{title}’ {starts_in_human}. You can rewatch the recording and see the materials — want me to open its summary?” If it’s upcoming, speak: “Great timing — the best fit is ‘{title}’ on {date} at {time} ({tz}), {starts_in_human}. Want me to mark you as attending?” Then mention 1–2 upcoming items next and end with a clear yes/no.
    - Do NOT move to general chat until you collect at least one answer for each of the 6 questions above (use get_user_memory to see what’s missing). Be encouraging but brief.
 
 Proactive course guidance (reduce churn):
@@ -1487,9 +1487,10 @@ app.post('/tools/execute', authRequired, async (req, res) => {
 
     if (toolName === 'recommend_courses') {
       try {
-        const { limit, days_ahead } = args || {};
-        const lim = Math.min(10, Math.max(1, Number(limit) || 3));
-        const ahead = Math.min(180, Math.max(1, Number(days_ahead) || 60));
+        const { limit, days_ahead, past_days } = args || {};
+        const lim = Math.min(10, Math.max(1, Number(limit) || 4));
+        const ahead = Math.min(180, Math.max(1, Number(days_ahead) || 45));
+        const pastWindowDays = Math.min(180, Math.max(1, Number(past_days) || 21));
         // Use list_courses-like aggregator and filter upcoming within N days
         const listRes = await (async () => {
           const colsRes = await query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='events_mysql_mirror'`);
@@ -1536,11 +1537,16 @@ app.post('/tools/execute', authRequired, async (req, res) => {
         const now = new Date();
         const futureLimit = new Date(now.getTime() + ahead*24*3600*1000);
         const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
-        const upcoming = (listRes.items || [])
-          .filter(x => x.start && x.start > now && x.start <= futureLimit)
-          .sort((a,b)=>a.start-b.start)
-          .slice(0, lim)
-          .map(x => {
+        const allItems = (listRes.items || []).filter(x => x.start);
+        // Upcoming within window (soonest first, no scoring)
+        let poolUp = allItems.filter(x => x.start > now && x.start <= futureLimit).sort((a,b)=> a.start - b.start).slice(0, lim * 3);
+        // Recent past within window (newest first, no scoring)
+        const pastLimit = new Date(now.getTime() - pastWindowDays*24*3600*1000);
+        let poolPast = allItems.filter(x => x.start <= now && x.start >= pastLimit).sort((a,b)=> b.start - a.start).slice(0, lim * 3);
+        const soonest = poolUp.slice(0, Math.min(3, lim));
+        const recent_past_base = poolPast.slice(0, Math.min(3, lim));
+        // Formatter for client (local fields + relative)
+        const fmt = (arr, statusOverride=null) => arr.map(x => {
             let start_local = null, start_date_local = null, start_time_local = null, start_weekday_local = null;
             try {
               start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(x.start);
@@ -1550,8 +1556,21 @@ app.post('/tools/execute', authRequired, async (req, res) => {
             } catch (_) {}
             const diffMs = x.start.getTime() - now.getTime();
             let starts_in_days = null, starts_in_weeks = null, starts_in_human = null;
-            if (diffMs <= 0) { starts_in_days = 0; starts_in_weeks = 0; starts_in_human = 'started'; }
-            else {
+            if (diffMs <= 0) {
+              const agoMs = Math.abs(diffMs);
+              const agoDays = Math.floor(agoMs / (24*3600*1000));
+              if (agoDays < 1) {
+                const hrs = Math.max(1, Math.round(agoMs / (3600*1000)));
+                starts_in_human = `${hrs} hour${hrs===1?'':'s'} ago`;
+              } else if (agoDays < 14) {
+                starts_in_human = `${agoDays} day${agoDays===1?'':'s'} ago`;
+              } else {
+                const w = Math.floor(agoDays / 7);
+                starts_in_human = `${w} week${w===1?'':'s'} ago`;
+              }
+              starts_in_days = -agoDays;
+              starts_in_weeks = Math.floor(Math.abs(starts_in_days) / 7);
+            } else {
               starts_in_days = Math.ceil(diffMs / (24*3600*1000));
               starts_in_weeks = Math.floor(starts_in_days / 7);
               if (starts_in_days < 1) {
@@ -1563,9 +1582,31 @@ app.post('/tools/execute', authRequired, async (req, res) => {
                 starts_in_human = `in ${starts_in_weeks} week${starts_in_weeks===1?'':'s'}`;
               }
             }
-            return { id: x.id, title: x.title, start_iso: x.start.toISOString(), start_local, start_date_local, start_time_local, start_weekday_local, timezone: tz, starts_in_days, starts_in_weeks, starts_in_human };
+            const status = statusOverride || (x.start > now ? 'upcoming' : 'past');
+            return { id: x.id, title: x.title, start_iso: x.start.toISOString(), start_local, start_date_local, start_time_local, start_weekday_local, timezone: tz, starts_in_days, starts_in_weeks, starts_in_human, status };
           });
-        return res.json({ ok: true, recommended: upcoming, window_days: ahead, timezone: tz });
+        // Attach short summary/excerpts for the model to decide
+        const addSummaries = async (arr) => {
+          if (!arr.length) return arr;
+          const ids = arr.map(x => x.id);
+          let summ = new Map();
+          try {
+            const placeholders = ids.map((_,i)=>`$${i+1}`).join(',');
+            const r = await query(`SELECT event_id, summary, summary_full FROM events_summary_mysql_mirror WHERE event_id IN (${placeholders})`, ids);
+            for (const row of (r.rows || [])) {
+              summ.set(String(row.event_id), String(row.summary_full || row.summary || ''));
+            }
+          } catch (_) {}
+          const strip = (s) => String(s||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+          return arr.map(x => {
+            const raw = summ.get(String(x.id)) || '';
+            const excerpt = strip(raw).slice(0, 300) + (raw && raw.length > 300 ? '…' : '');
+            return { ...x, summary_excerpt: excerpt };
+          });
+        };
+        const upcoming = await addSummaries(fmt(soonest,'upcoming'));
+        const recent_past = await addSummaries(fmt(recent_past_base,'past'));
+        return res.json({ ok: true, upcoming, recent_past, window_days: ahead, past_window_days: pastWindowDays, timezone: tz });
       } catch (e) {
         console.error('recommend_courses error', e);
         return res.status(500).json({ ok: false, error: 'recommend_courses_failed' });

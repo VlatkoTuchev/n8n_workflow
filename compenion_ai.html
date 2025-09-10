@@ -1016,10 +1016,15 @@
                     {
                         type: 'function',
                         name: 'recommend_courses',
-                        description: 'Recommend up to N upcoming courses within a days-ahead window; includes local date/time fields like list_courses.',
+                        description: 'Recommend up to N upcoming courses within a days-ahead window; accepts optional keywords to bias titles; includes local date/time fields like list_courses.',
                         parameters: {
                             type: 'object',
-                            properties: { limit: { type: 'number' }, days_ahead: { type: 'number' } },
+                            properties: {
+                                limit: { type: 'number' },
+                                days_ahead: { type: 'number' },
+                                keywords: { anyOf: [ { type: 'string' }, { type: 'array', items: { type: 'string' } } ] },
+                                priority_keywords: { anyOf: [ { type: 'string' }, { type: 'array', items: { type: 'string' } } ] }
+                            },
                             additionalProperties: false
                         }
                     },
@@ -1706,7 +1711,11 @@
                                     maybeSendFiller();
                                     const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'list_courses', arguments: args || {} }) }).then(r=>r.json());
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
-                                    await beginNoToolFollowup();
+                                    const n = (out && out.counts && out.counts.upcoming) || 0;
+                                    const instr = n > 0
+                                      ? `I found ${n} upcoming courses. Read out the 2–3 soonest with: title + local date + time + (timezone) + starts_in_human. End with a yes/no: “Want me to mark you as attending the first one?”`
+                                      : `I couldn’t find upcoming courses in the window. Offer to broaden the date range or switch topic.`;
+                                    await beginNoToolFollowup(instr);
                                 } catch (e) {
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'list_courses_failed' }) } }));
                                 }
@@ -1720,7 +1729,11 @@
                                     maybeSendFiller();
                                     const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'recommend_courses', arguments: args || {} }) }).then(r=>r.json());
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
-                                    await beginNoToolFollowup();
+                                    const up = (out && Array.isArray(out.upcoming)) ? out.upcoming : [];
+                                    const past = (out && Array.isArray(out.recent_past)) ? out.recent_past : [];
+                                    // Let the model choose the single best course (based on title + summary_excerpt) regardless of time.
+                                    const instr = 'From the tool result, pick the SINGLE best course for the learner (use title + summary_excerpt). If it\'s past, say: “Oh — you just missed ‘{title}’ {starts_in_human}. You can still rewatch the recording and see the materials — want me to open its summary?” If it\'s upcoming, say: “Great timing — the best fit is ‘{title}’ on {date} at {time} ({tz}), {starts_in_human}. Want me to mark you as attending?” Then mention 1–2 upcoming items next (title + local date/time + starts_in_human). End with a clear yes/no (attend vs. open summary). Keep it natural, energetic, and brief.';
+                                    await beginNoToolFollowup(instr);
                                 } catch (e) {
                                     dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'recommend_courses_failed' }) } }));
                                 }
@@ -2179,7 +2192,7 @@
                             : 'OPEN ENERGETIC INTRO: Start with a energetic and motivational happy greeting, upbeat one‑liner and immediately introduce yourself by name (e.g., “I’m Nova”). Keep it friendly and motivating (≤1 sentence). If you do not know the name, you may ask it in one short sentence.';
                         parts.push(greetLine);
                         if (!ctx.preferredLanguage) {
-                            parts.push('Language choice (first line): Ask if they want to continue in English or switch languages (examples: Macedonian, Albanian, Serbian, Greek — and you know many more). IMPORTANT: Ask ONLY this question now and WAIT for their answer before proceeding. Do not start onboarding until they answer.');
+                            parts.push('Language choice (first line): Ask if they want to continue in English or switch languages (examples: Macedonian, Albanian, Serbian, Greek and explicitly say that you know many more). IMPORTANT: Ask ONLY this question now and WAIT for their answer before proceeding. Do not start onboarding until they answer.');
                             try { awaitingLanguageChoice = true; } catch (_) {}
                         } else {
                             // Language already chosen previously; continue without asking again
