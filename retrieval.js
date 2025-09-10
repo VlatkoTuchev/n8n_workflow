@@ -18,8 +18,6 @@ async function createChatSession({ userId, title }) {
   return { id: res.rows[0].id };
 }
 
-// addSpokenLanguage removed
-
 // ---------- Chat message persistence (single row per session_id,user_id with JSON conversation) ----------
 /**
  * Append a turn to the aggregated JSON array in chat_message for (session_id,user_id).
@@ -94,17 +92,6 @@ async function addChatMessage({ sessionId, userId, role, content }) {
 // - chat_session_summary holds the cumulative session summary used for continuity
 // - user_language stores a single preferred language per user
 // ====================================================================================================
-async function getRecentMessages({ sessionId, n = 50 }) {
-  const res = await query(
-    `SELECT id, session_id, user_id, role, content, created_at
-       FROM chat_message
-      WHERE session_id = $1
-      ORDER BY created_at DESC
-      LIMIT $2`,
-    [sessionId, Math.min(Math.max(n, 1), 200)]
-  );
-  return res.rows;
-}
 
 // [RT2] Summaries & preferences
 async function saveSessionSummary({ sessionId, userId, summary }) {
@@ -117,18 +104,6 @@ async function saveSessionSummary({ sessionId, userId, summary }) {
     [sessionId || null, userId || null, String(summary || '')]
   );
   return res.rows[0];
-}
-
-async function readLatestSummary({ userId }) {
-  const res = await query(
-      `SELECT id, session_id, summary, next_prompt, created_at
-          FROM chat_session_summary
-        WHERE user_id = $1
-        ORDER BY created_at DESC
-        LIMIT 1`,
-      [userId]
-    );
-  return res.rows[0] || null;
 }
 
 // Preferred language (Postgres)
@@ -154,9 +129,8 @@ async function setPreferredLanguagePg({ userId, language }) {
 
 // ====================================================================================================
 // Section: Users (identity records only)
-// - KB functions removed (no embeddings / vector search in this setup)
 // ====================================================================================================
-// [RT3] Users & KB
+// [RT3] Users
 async function createUser({ email }) {
   const res = await query(
     `INSERT INTO app_user (email) VALUES ($1)
@@ -170,8 +144,8 @@ async function createUser({ email }) {
 module.exports = {
   createUser,
   createChatSession,
-  addChatMessage, getRecentMessages,
-  saveSessionSummary, readLatestSummary,
+  addChatMessage,
+  saveSessionSummary,
   readPreferredLanguagePg, setPreferredLanguagePg,
   readAgentNamePg, setAgentNamePg,
   readAgentSettingsPg, setAgentSettingsPg,

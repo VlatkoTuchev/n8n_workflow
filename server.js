@@ -16,14 +16,12 @@ const path = require('path');
 const cors = require('cors');
 require('dotenv').config();
 const { query } = require('./db');
-const { redis, connectRedis, addChatTurn, getRecentChat, getFullChat, setSessionActivity } = require('./redis');
+const { redis, connectRedis, addChatTurn, getFullChat, setSessionActivity } = require('./redis');
 const {
   createUser,
   createChatSession,
   addChatMessage,
-  getRecentMessages,
   saveSessionSummary,
-  readLatestSummary,
   readPreferredLanguagePg,
   setPreferredLanguagePg,
   readAgentNamePg,
@@ -1191,30 +1189,6 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       return res.json({ ok: true });
     }
 
-    if (toolName === 'get_recent_chat' || toolName === 'getRecentChat') {
-      const { sessionId, n } = args || {};
-      if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
-      const items = await getRecentChat(sessionId, n || 20);
-      let dbItems = [];
-      try { dbItems = await getRecentMessages({ sessionId, n: n || 50 }); } catch (_) {}
-      return res.json({ ok: true, items, dbItems });
-    }
-
-    if (toolName === 'save_session_summary') {
-      const { sessionId, summary, use_model, auto, from_messages } = args || {};
-      if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
-      // If explicitly requested (or summary omitted), summarize from chat_message via model
-      if (use_model === true || auto === true || from_messages === true || !summary) {
-        console.log('[summary] save_session_summary→summarizeAndSaveSession', { sessionId, user: authedUserId });
-        const result = await summarizeAndSaveSession(sessionId, authedUserId);
-        return res.json({ ok: true, ...result });
-      }
-      console.log('[summary] saving raw summary for session', sessionId, 'user', authedUserId);
-      const out = await saveSessionSummary({ sessionId, userId: authedUserId, summary });
-      console.log('[summary] saved id', out.id);
-      return res.json({ ok: true, id: out.id });
-    }
-
     if (toolName === 'enter_event') {
       try {
         const { event_id, sessionId } = args || {};
@@ -1308,12 +1282,6 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
       const result = await summarizeAndSaveSession(sessionId, authedUserId);
       return res.json({ ok: true, ...result });
-    }
-
-    if (toolName === 'read_latest_summary') {
-      if (!authedUserId) return res.status(400).json({ error: 'userId is required' });
-      const row = await readLatestSummary({ userId: authedUserId });
-      return res.json({ ok: true, summary: row });
     }
 
     if (toolName === 'read_preferred_language') {

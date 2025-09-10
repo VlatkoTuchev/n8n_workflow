@@ -41,11 +41,11 @@ async function addChatTurn(sessionId, role, content) {
   } catch (_) {}
 }
 
-async function getRecentChat(sessionId, n = 20) {
-  await connectRedis();
-  const arr = await redis.lRange(`chat:${sessionId}`, -n, -1);
-  return arr.map((s) => { try { return JSON.parse(s); } catch { return null; } }).filter(Boolean);
-}
+// async function getRecentChat(sessionId, n = 20) {
+//   await connectRedis();
+//   const arr = await redis.lRange(`chat:${sessionId}`, -n, -1);
+//   return arr.map((s) => { try { return JSON.parse(s); } catch { return null; } }).filter(Boolean);
+// }
 
 async function getFullChat(sessionId) {
   await connectRedis();
@@ -75,4 +75,4 @@ async function getSessionActivity(sessionId) {
   return ts ? Number(ts) : null;
 }
 
-module.exports = { redis, connectRedis, addChatTurn, getRecentChat, getFullChat, setSessionActivity, getSessionActivity };
+module.exports = { redis, connectRedis, addChatTurn, getFullChat, setSessionActivity, getSessionActivity };
