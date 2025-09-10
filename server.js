@@ -691,9 +691,14 @@ Safety & inclusion: Be culturally respectful; avoid probing sensitive info; norm
         lines.push('- No timestamp available: use a concise, non‑repetitive opener and continue quickly.');
       }
       lines.push('- Vary openings across sessions; avoid repeating phrasing. Keep it fresh and human.');
-      // Enforce a concrete first-turn behavior to avoid jumping into mid-topic
-      lines.push('- FIRST SENTENCE MUST be a brief, natural greeting (use the learner’s display name if provided). Never start mid-task, with tool requests, or with device/mic checks.');
-      lines.push('- On the very first turn: If this is a first session or onboarding answers are missing, run the onboarding script (language choice → 5 short questions). Otherwise, do NOT reference prior content and ask ONE short question: “Continue where we left off or start something new?”.');
+      // Greeting policy depends on whether we have prior context
+      if (hasHistory) {
+        lines.push('- Greeting policy: DO NOT re‑introduce yourself. Skip “Hi, I\'m …”. Continue naturally from the latest context with one short line or a single clarifying question.');
+      } else {
+        // Enforce a concrete first-turn behavior when there is no prior history
+        lines.push('- FIRST SENTENCE MUST be a brief, natural greeting (use the learner’s display name if provided). Never start mid-task, with tool requests, or with device/mic checks.');
+        lines.push('- On the very first turn: If this is a first session or onboarding answers are missing, run the onboarding script (language choice → 5 short questions). Otherwise, do NOT reference prior content and ask ONE short question: “Continue where we left off or start something new?”.');
+      }
       lines.push('- If the learner explicitly asks “what did we last talk about?”, answer with a 1–2 line summary drawn ONLY from the most recent excerpt, then ask a single follow‑up question.');
       insParts.push(lines.join('\n'));
     } catch (_) {}

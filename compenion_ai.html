@@ -1511,8 +1511,7 @@
                             isResponseActive = false;
                             responseRequested = false;
                             resetIdleTimer();
-                            // If we were waiting for the user's language choice, allow the assistant to respond now
-                            try { if (awaitingLanguageChoice) awaitingLanguageChoice = false; } catch (_) {}
+                            // Do NOT clear awaitingLanguageChoice here; we wait for the user's answer first
                             // Restore tool usage if we temporarily disabled it for follow-up
                             if (toolFollowupLock) {
                                 toolFollowupLock = false;
@@ -1565,6 +1564,8 @@
                         if (msg.type === 'conversation.item.input_audio_transcription.completed') {
                             if (msg.transcript) lastTranscript = msg.transcript;
                             hadUserSpeechInWindow = true;
+                            // If we asked for language, the user's speech is the answer — allow the assistant to proceed now
+                            try { if (awaitingLanguageChoice) awaitingLanguageChoice = false; } catch (_) {}
                             lastUserSpeechMs = Date.now();
                             resetIdleTimer();
                             try {
@@ -2164,18 +2165,6 @@
                     const anchor = await fetchLastUserAnchor();
                     // STEP 2: if the user is brand-new (no history), auto-introduce; else wait for user
                     const parts = [];
-                    if (ctx.preferredLanguage) {
-                        parts.push(`Language choice (first line): Confirm you can continue in ${ctx.preferredLanguage}, or offer to switch (examples: Macedonian, Albanian, Serbian, Greek or any other language that the user prefers). IMPORTANT: Ask ONLY this question now and WAIT for their answer before proceeding. If they choose another language, call set_preferred_language and continue in that language.`);
-                        currentPreferredLanguage = ctx.preferredLanguage;
-                    } else {
-                        parts.push('Language choice (first line): Ask if they want to continue in English or switch languages (examples: Macedonian, Albanian, Serbian, Greek). IMPORTANT: Ask ONLY this question now and WAIT for their answer before proceeding. Until they choose, speak in English. If they choose, call set_preferred_language and continue in that language.');
-                        currentPreferredLanguage = 'English';
-                    }
-                    // The server has already provided digest/memory in instructions. Use exactly one relevant detail if helpful.
-                    const greetLine = ctx.userName
-                        ? `OPEN ENERGETIC INTRO: Start with a energetic and motivational happy greeting, upbeat one‑liner that uses the learner’s name (e.g., “Hey ${ctx.userName}, nice to meet you!”). Immediately introduce yourself by name (e.g., “I’m Nova”), in the same line. Keep it friendly and motivating (≤1 sentence).`
-                        : 'OPEN ENERGETIC INTRO: Start with a energetic and motivational happy greeting, upbeat one‑liner and immediately introduce yourself by name (e.g., “I’m Nova”). Keep it friendly and motivating (≤1 sentence). If you do not know the name, you may ask it in one short sentence.';
-                    parts.push(greetLine);
                     if (wasPostSettingsReload) {
                         const why = (postSettingsReloadWhy || '').toLowerCase();
                         const what = (why === 'both') ? 'voice and style' : (why === 'style' ? 'style' : 'voice');
@@ -2184,7 +2173,21 @@
                         responseRequested = true;
                         dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: parts.join(' ') } }));
                     } else if (!hasHistory) {
-                        parts.push('FIRST CONTACT (run onboarding): After the energetic self‑intro and the language choice question above, explicitly say: “I’ll ask a few short questions to tailor your learning journey and help with real day‑to‑day tasks.” Then ask the first onboarding question: “What do you want to figure out with AI first?” Give 2–3 examples (e.g., “Automate repetitive tasks”, “Improve team performance”, “Learn AI from scratch”). After they answer, call add_user_memory with type:"goal" and the short statement, then ask the next onboarding question. Do not ask about hobbies or other smalltalk.');
+                        // FIRST SESSION ONLY: energetic greeting; ask language ONLY if not saved yet
+                        const greetLine = ctx.userName
+                            ? `OPEN ENERGETIC INTRO: Start with a energetic and motivational happy greeting, upbeat one‑liner that uses the learner’s name (e.g., “Hey ${ctx.userName}, nice to meet you!”). Immediately introduce yourself by name (e.g., “I’m Nova”), in the same line. Keep it friendly and motivating (≤1 sentence).`
+                            : 'OPEN ENERGETIC INTRO: Start with a energetic and motivational happy greeting, upbeat one‑liner and immediately introduce yourself by name (e.g., “I’m Nova”). Keep it friendly and motivating (≤1 sentence). If you do not know the name, you may ask it in one short sentence.';
+                        parts.push(greetLine);
+                        if (!ctx.preferredLanguage) {
+                            parts.push('Language choice (first line): Ask if they want to continue in English or switch languages (examples: Macedonian, Albanian, Serbian, Greek — and you know many more). IMPORTANT: Ask ONLY this question now and WAIT for their answer before proceeding. Do not start onboarding until they answer.');
+                            try { awaitingLanguageChoice = true; } catch (_) {}
+                        } else {
+                            // Language already chosen previously; continue without asking again
+                            currentPreferredLanguage = ctx.preferredLanguage;
+                        }
+                        if (ctx.preferredLanguage) {
+                            parts.push('FIRST CONTACT (run onboarding): After the energetic self‑intro, explicitly say: “I’ll ask a few short questions to tailor your learning journey and help with real day‑to‑day tasks.” Then ask the first onboarding question: “What do you want to figure out with AI first?” Give 2–3 examples (e.g., “Automate repetitive tasks”, “Improve team performance”, “Learn AI from scratch”). After they answer, call add_user_memory with type:"goal" and the short statement, then ask the next onboarding question. Do not ask about hobbies or other smalltalk.');
+                        }
                         initialGreetingSent = true;
                         responseRequested = true;
                         dc.send(JSON.stringify({

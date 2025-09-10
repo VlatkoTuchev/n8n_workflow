@@ -1,227 +1,282 @@
-# Code Overview
+# Code Overview – Full System 
 
-Clickable, sectioned map of the codebase with deep links to key spots in the main runtime files. Links use relative paths; most editors and GitHub jump to the line after the `#L…` anchor. If your editor ignores the line anchor, open the file and search for the nearest function name or the square‑bracket section tags in comments (e.g., `[CA1.1]`).
+## 1) Realtime “Intelligence Injection” (where the brain enters)
 
-Top files
-- Client: [../compenion_ai.html](../compenion_ai.html)
-- Server: [../server.js](../server.js)
-- Postgres helpers: [../retrieval.js](../retrieval.js)
-- Redis helpers: [../redis.js](../redis.js)
-- Schemas: [../db/init.sql](../db/init.sql), [../db/mysql-init.sql](../db/mysql-init.sql)
-- Project guide: [../README.md](../README.md)
+1.1 Purpose
+- Token minting (server): [../server.js#L276](../server.js#L276)
+  - Builds `instructions` from: language policy and onboarding gate; Working Memory Pack (top‑K memory + rolling digest); recent summaries/snippets; optional recency/reload cues; user display name; preferred voice/name/style.
+  - Calls OpenAI Realtime sessions API with { model, modalities: [`audio`,`text`], voice, instructions } and returns ephemeral `{ token, hasHistory, preferredVoice }` to the browser.
+- Why server‑side: keeps API keys off the client and safely injects per‑user context.
 
----
+1.2 Realtime token (definition)
+- Short‑lived credential (`client_secret.value`) used by the client to authenticate the SDP exchange with OpenAI Realtime. Minted by the server for every new session.
 
-## 1) Client — compenion_ai.html
-High‑level: Single‑page client UI. Renders the 3D avatar, sets up OpenAI Realtime (WebRTC), wires the model’s tool calls to UI/server actions (courses, quizzes, summaries, memory, preferences, agent settings, code‑assist), and handles session lifecycle (heartbeats, finalize on idle/exit).
+1.3 How `instructions` are composed (inputs)
+- Inputs fetched
+  - Profile and mirrors: `composeUserContextSummary(email, pgUserId)` builds a short, human‑readable context digest (favorites, attended, categories, upcoming, recent webinar Qs) from Postgres mirror tables.
+  - Language: `readPreferredLanguagePg({ userId })` → `preferredLanguage` guardrail.
+  - Agent personalization: `readAgentSettingsPg({ userId })` → `preferredVoice`, `agentName`, `agentStyle`.
+  - Working memory: `selectTopKUserMemory(userId)` → grouped top‑K items (facts, preferences, goals, progress, open questions) assembled into `workingPack`.
+  - Recent session memory: `getRecentSummaries(userId, n)` → deduplicated/recency‑filtered short `recentSummariesBlock`.
+  - Conversation excerpts: query on `chat_message` builds `recentConvosBlock` and a strict `anchorText` for continuation; computes `lastConversationUpdatedAt`.
 
-Jump to sections
-- 3D Avatar (Three.js): [../compenion_ai.html#L345](../compenion_ai.html#L345)
-  - Scene/camera/lights, GLB loading (“walk”, “dance”, “boxing”), normalization, cross‑fades
-  - Public API: `window.AvatarController.setWalk|setDance|setFight`
-- Realtime entrypoint: [../compenion_ai.html#L626](../compenion_ai.html#L626)
-  - PeerConnection, remote audio playout, audio worklet envelope, microphone capture/mute, token mint + SDP exchange
-- Tools registry (functions callable by the model): [../compenion_ai.html#L859](../compenion_ai.html#L859)
-- Quiz UI (modal): [../compenion_ai.html#L1125](../compenion_ai.html#L1125)
-- Summary UI (overlay): [../compenion_ai.html#L1211](../compenion_ai.html#L1211)
-- Events list + Enter/Quiz/Summary actions: [../compenion_ai.html#L1248](../compenion_ai.html#L1248)
-- Code‑assist panel: [../compenion_ai.html#L1403](../compenion_ai.html#L1403)
-- Client idle finalizer (best‑effort): [../compenion_ai.html#L1305](../compenion_ai.html#L1305)
-- Logout wiring: [../compenion_ai.html#L2247](../compenion_ai.html#L2247)
-- Mute toggle: [../compenion_ai.html#L2269](../compenion_ai.html#L2269)
-- Pagehide/visibility finalize: [../compenion_ai.html#L2339](../compenion_ai.html#L2339)
+1.4 Instruction sections (variables in server code)
+  - Identity & tone: baseline persona text (friendly, concise, voice‑first) + `agentName`/`agentStyle` overrides if present.
+  - Continuity policy: `continuityBlock` changes depending on `hasHistory` (first contact vs continuation). Adds a “Continuation anchor” with `anchorText` only for follow‑up turns.
+  - Language policy: switches between “confirm or offer switch” vs “ask for language” based on `preferredLanguage`.
+  - Onboarding gate: hard ordering of onboarding questions (language → 5 short items) and the rule to persist answers via `add_user_memory`.
+  - Tooling etiquette: call tools silently; keep spoken output short; summarize results; don’t read raw JSON.
+  - Data sourcing rules: when to call `list_courses`, `recommend_courses`, `get_event_details`, and how to speak localized fields (e.g., `start_date_local`, `start_time_local`, `starts_in_human`).
+  - Safety/guardrails: avoid off‑scope claims (no camera/surveillance), ask one question at a time, be transparent on uncertainty.
+  - Recency/reload heuristics: lines derived from `sinceLastMs`, `refreshCount`, and `post_settings_reload` flags to tune the first turn; injects voice/style change notice when applicable.
+  - Context blocks: appends `contextSummary` (from mirrors), `recentSummariesBlock`, `workingPack`, and `recentConvosBlock` when available.
 
-Notes
-- The client posts tool calls to `POST /tools/execute`; see the Server section for each tool.
-- Audio worklet is optional; there’s an analyser fallback for environments without Worklet support.
+1.5 Assembly & output
+  - The parts above are concatenated into `instructionsFull`, optionally trimmed to `instructions` (current implementation keeps it full).
+  - OpenAI Session request payload includes `model`, `modalities`, `voice` (from `preferredVoice` defaulting to alloy), and `instructions`.
+  - Response fields used downstream: `token` (ephemeral), `hasHistory` (boolean), `preferredVoice` (echoed for the client to align voice).
 
-### Client functions (compenion_ai.html)
-Anchor: #client-functions — one‑line explanations and deep links to each function.
+1.6 Client contract (`/realtime/token` response)
+  - `token`: passed back via `openAiSessionToken`; forwarded later as `X-OpenAI-Session-Token` to `/realtime/sdp` so the offer/answer is authenticated with per‑user `instructions`.
+  - `hasHistory`: toggles the client’s first‑turn pacing (defers VAD until the greeting completes, etc.).
+  - `preferredVoice`: optional client‑side voice alignment after DataChannel opens.
 
-- `initThreeAvatarLayer()` [../compenion_ai.html#L351](../compenion_ai.html#L351): Bootstraps the Three.js scene, camera, lights, ground, loaders, and main loop.
-- `crossFadeTo(name, fade)` [../compenion_ai.html#L410](../compenion_ai.html#L410): Smoothly transitions the avatar’s AnimationMixer to the named clip.
-- `normalizeAndGroundModel(root)` [../compenion_ai.html#L420](../compenion_ai.html#L420): Centers and scales a loaded GLB so feet touch the ground plane.
-- `setFacingByDirection()` [../compenion_ai.html#L460](../compenion_ai.html#L460): Sets yaw based on current horizontal velocity so the avatar faces movement.
-- `updateAutonomy(deltaMs)` [../compenion_ai.html#L475](../compenion_ai.html#L475): Lightweight pacing across X with clamp bounds; idle in non‑walk modes.
-- `startWalking()` [../compenion_ai.html#L489](../compenion_ai.html#L489): Switches to walk clip and resumes horizontal pacing.
-- `enableAvatarDragging()` (IIFE) [../compenion_ai.html#L497](../compenion_ai.html#L497): Pointer‑drag move/raise the avatar within screen bounds.
-- `onResize()` [../compenion_ai.html#L539](../compenion_ai.html#L539): Resizes renderer, updates camera projection, re‑normalizes avatar.
-- `animate()` [../compenion_ai.html#L583](../compenion_ai.html#L583): rAF loop: tick mixer, autonomy, render.
-- `window.AvatarController.setWalk|setDance|setFight` [../compenion_ai.html#L593](../compenion_ai.html#L593): Public controls for Realtime tools.
+1.7 Failure/edge behavior
+  - If mirrors are empty, `contextSummary` becomes empty and the onboarding gate dominates the first turn.
+  - If no `preferredLanguage`, instructions force a one‑line language choice question; the model must call `set_preferred_language` before continuing in a new language.
+  - If recent summaries contain off‑topic drift, they’re filtered before inclusion; if `sinceLastMs` is very recent, recency guidance nudges a shorter greeting.
 
-- `startOpenAIRealtime()` [../compenion_ai.html#L626](../compenion_ai.html#L626): Full Realtime setup — token mint, SDP exchange, audio/mic wiring, tools.
-  - `setMood(mood)` [../compenion_ai.html#L660](../compenion_ai.html#L660): Color theme for the speaking bubble.
-  - `animateBubble()` [../compenion_ai.html#L669](../compenion_ai.html#L669): Scales/glows the bubble based on audio envelope.
-  - `setupEnvelopeProcessing(stream)` [../compenion_ai.html#L680](../compenion_ai.html#L680): AudioWorklet or analyser fallback for envelope.
-  - `getUserId()` [../compenion_ai.html#L1055](../compenion_ai.html#L1055): Reads user id via `/user/profile` and caches `__CA_UID`.
-  - `getSessionId()` [../compenion_ai.html#L1070](../compenion_ai.html#L1070): Returns current chat session id from `sessionStorage`.
-  - `startNewSessionForUser(userId)` [../compenion_ai.html#L1073](../compenion_ai.html#L1073): Creates a new session via tool call and stores its id.
-  - `ensureQuizUI()` [../compenion_ai.html#L1121](../compenion_ai.html#L1121): Lazily builds the quiz modal container.
-  - `renderQuizQuestion()` [../compenion_ai.html#L1133](../compenion_ai.html#L1133): Renders current MCQ and Next/Prev logic.
-  - `openQuizForEvent(eventId)` [../compenion_ai.html#L1187](../compenion_ai.html#L1187): Fetches quiz by event and opens the modal.
-  - `ensureSummaryUI()` [../compenion_ai.html#L1207](../compenion_ai.html#L1207): Lazily builds the summary overlay container.
-  - `openSummaryHtml(html, title)` [../compenion_ai.html#L1224](../compenion_ai.html#L1224): Loads provided HTML into the summary overlay.
-  - `openSummaryForEvent(eventId, title)` [../compenion_ai.html#L1230](../compenion_ai.html#L1230): Loads saved summary for an event from the server.
-  - `loadEvents()` [../compenion_ai.html#L1248](../compenion_ai.html#L1248): Lists courses from the server and renders cards with Enter/Quiz/Summary actions.
-  - `maybeSendFiller()` [../compenion_ai.html#L1300](../compenion_ai.html#L1300): Marks tool activity to avoid back‑to‑back speech.
-  - `finalizeSessionForIdle()` [../compenion_ai.html#L1309](../compenion_ai.html#L1309): Best‑effort background finalize after inactivity.
-  - `resetIdleTimer()` [../compenion_ai.html#L1322](../compenion_ai.html#L1322): Restarts client idle countdown.
-  - `requestResponseSafe()` [../compenion_ai.html#L1327](../compenion_ai.html#L1327): Sends response.create only if none in flight.
-  - `waitForSessionUpdated(ms)` [../compenion_ai.html#L1341](../compenion_ai.html#L1341): Resolves after a session.updated event or timeout.
-  - `beginNoToolFollowup(text?)` [../compenion_ai.html#L1350](../compenion_ai.html#L1350): Temporarily disables tools and prompts a short follow‑up.
-  - `ensureCodeAssistLauncher()` [../compenion_ai.html#L1365](../compenion_ai.html#L1365): Floating entry button for the code‑assist panel.
-  - `openOrRenderCodeAssist(payload)` [../compenion_ai.html#L1385](../compenion_ai.html#L1385): Opens or re‑renders the right panel with code/explanation.
-  - `escapeHtml(s)` [../compenion_ai.html#L1390](../compenion_ai.html#L1390): Simple HTML escaper for code blocks.
-  - `ensurePanel()` [../compenion_ai.html#L1391](../compenion_ai.html#L1391): Creates the panel shell on first use.
-  - `caKey(base)` [../compenion_ai.html#L1474](../compenion_ai.html#L1474): Namespaces code‑assist storage per user.
-  - `setupMuteToggle()` (IIFE) [../compenion_ai.html#L2269](../compenion_ai.html#L2269): Mute/unmute mic toggle wiring.
-  - `summarizeAndSave` [../compenion_ai.html#L2299](../compenion_ai.html#L2299): Attempts session finalization on pagehide/visibility.
-
-What it does (in practice)
-- Starts a WebRTC session: mints an ephemeral token from `/realtime/token`, creates an SDP offer, posts it to `/realtime/sdp`, and attaches the returned SDP answer.
-- Plays assistant audio via a hidden `<audio>` element and animates a small “speaking” bubble using an AudioWorklet envelope.
-- Captures microphone (AEC/NS enabled) and exposes a robust mute toggle that flips both local tracks and any RTCRtpSender track.
-- Registers a large tool catalog. When the model calls a tool, the client executes the matching UI/server action and replies with a compact JSON result through the data channel.
-- Shows small, purpose‑built panels: code‑assist (right drawer), quiz modal, and course summary overlay.
-- Sends session heartbeats; on idle/close it best‑effort finalizes the session so summaries/memory are saved.
-
-Data contracts (outbound to server)
-- `POST /realtime/token` → `{ token, hasHistory, preferredVoice }`
-- `POST /realtime/sdp` with `application/sdp` body and header `X-OpenAI-Session-Token` → returns SDP answer
-- `POST /tools/execute` with `{ name, arguments }` for specific tools (see Server section)
-- `POST /sessions/heartbeat` and `/sessions/finalize` on timers/teardown
-
-Failure behavior
-- Token/SDP failures are surfaced in console with minimal UI disruption. Mic permission failures disable the mute button and continue in text‑only mode.
-- On unload, the client tries `fetch(keepalive)`, then `sendBeacon`, then a sync XHR as a last resort to finalize the session quickly.
-
-Modify safely
-- When adding a new tool: register it in the Tools registry (name + JSON schema) and implement its call handler in the message loop. Keep spoken output short and put details into UI elements.
-- 3D avatar is isolated behind `window.AvatarController` — extend its API if you need more animations or effects.
+1.8 Extending `instructions` safely (checklist)
+  - Add inputs: prefer server‑side readers (e.g., expand `composeUserContextSummary` or create new `read…Pg` helpers) and keep them summarized, not raw data.
+  - Add policies: introduce a new named block and reference explicit variables (avoid implicit behavior). Keep turn limits and tool etiquette consistent.
+  - Add tools: document when to call and how to speak their outputs (fields and constraints). Update both `instructions` guidance and the server tools.
+  - Keep first‑turn rules strict: language choice first; onboarding before general chat unless answers exist.
 
 ---
 
-## 2) Server — server.js
-High‑level: Express server that mints Realtime tokens with per‑user instructions (context + memory), proxies SDP to OpenAI, exposes user/profile/context endpoints, executes tool calls (courses, quizzes, favorites, memory, preferences, agent settings), persists chat in Postgres + Redis, and summarizes sessions (on demand or idle).
+## 2) Transport Handshake (SDP offer/answer)
 
-Core endpoints and helpers
-- Realtime SDP proxy: [../server.js#L221](../server.js#L221)
-- Realtime token (instructions + Working Memory Pack): [../server.js#L276](../server.js#L276)
-- Auth: register [../server.js#L778](../server.js#L778), login [../server.js#L829](../server.js#L829), logout [../server.js#L873](../server.js#L873)
-- Me/profile/context: `/me` [../server.js#L911](../server.js#L911), `/user/profile` [../server.js#L916](../server.js#L916), `/user/context` [../server.js#L942](../server.js#L942)
-- Tools hub (POST `/tools/execute`): [../server.js#L1108](../server.js#L1108)
-  - Chat/session: create session, add chat turn, recent chat/history
-  - Language + agent: read/set preferred language, read/set agent name/settings
-  - Memory: add/list user memory; rolling digest maintained by summarizer
-  - Courses: `list_courses`, `recommend_courses`, `get_event_details`
-  - Participation/favorites: `enter_event`, `user_favourite`
-  - Quizzes: `get_event_quiz`, `submit_event_quiz`
-  - Summaries: `save_session_summary` (and model‑driven summarize)
-- Admin: delete memories [../server.js#L1923](../server.js#L1923)
-- Static assets and HTML routes: [../server.js#L1952](../server.js#L1952)
-- Index routing (`/`): [../server.js#L1975](../server.js#L1975)
-- Summarization helper (finalization pipeline): [../server.js#L1994](../server.js#L1994)
-- Sessions: heartbeat [../server.js#L2134](../server.js#L2134), finalize [../server.js#L2147](../server.js#L2147)
-- Idle summarizer loop: section [../server.js#L2183](../server.js#L2183), interval [../server.js#L2191](../server.js#L2191)
-- Startup (listen): [../server.js#L2240](../server.js#L2240)
+2.1 Purpose
+- Establish a WebRTC connection between the browser and OpenAI Realtime while keeping secrets server‑side and negotiation same‑origin.
 
-Supporting helpers
-- Ensure MySQL user for CDC mirroring: [../server.js#L47](../server.js#L47)
-- Compose per‑user context summary for instructions: [../server.js#L71](../server.js#L71)
+2.2 Actors & endpoints
+- Client (browser): builds the local session description and sends the offer to your server.
+- Server: `/realtime/sdp` proxy → forwards offer to OpenAI Realtime and relays back the answer.
+- OpenAI Realtime: returns an SDP answer that finalizes codecs, ICE candidates, DTLS keys.
 
-Operational notes
-- Static exposure of the repo root is convenient for dev (GLBs/worklets). Consider narrowing mounts in production.
-- The idle summarizer can be disabled via `ENABLE_IDLE_SUMMARIZER=false`.
+2.3 Sequence (happy path)
+1) Client prepares the peer connection: `RTCPeerConnection` with STUN, audio transceiver, DataChannel `oai-events`.
+2) Client creates the offer: `createOffer()` → `setLocalDescription(offer)`; waits until `iceGatheringState === 'complete'` so ICE candidates are included.
+3) Client calls your proxy: POST `ALL /realtime/sdp` with headers `Content-Type: application/sdp`, `Accept: application/sdp`, `X-OpenAI-Session-Token: <ephemeral>`, and body = raw SDP offer.
+4) Server proxies to OpenAI Realtime: URL `https://api.openai.com/v1/realtime?model=<MODEL>`; headers `Authorization: Bearer <ephemeral or API key>`, `Content-Type: application/sdp`, `Accept: application/sdp`, `OpenAI-Beta: realtime=v1`; returns upstream SDP answer and echoes `X-Session-Token-Used`.
+5) Client completes the handshake: `setRemoteDescription(answer)`; `ontrack` streams assistant audio; `DataChannel.onopen` resolves the command channel.
 
-How token minting builds intelligence
-- Pulls compact “who/what” context from Postgres MySQL‑mirror tables (categories, upcoming, attended, favorites, quizzes, recent webinar Qs).
-- Reads preferred language and agent settings (name/voice/style) from Postgres app tables.
-- Builds a “Working Memory Pack” from `user_memory` top‑K items and a short rolling digest. This is injected into the Realtime session as part of `instructions` so the very first response is already personalized.
-- Applies first‑turn and onboarding policies (language choice → 5 short questions). These guardrails live server‑side so the client stays thin.
+2.4 Security & rationale
+- Ephemeral token from `/realtime/token` authenticates the SDP exchange with per‑user `instructions`; fallback to API key loses per‑user context.
+- Same‑origin proxy keeps the API key off the client and avoids browser CORS/header pitfalls.
 
-Auth bridging (MySQL ↔ Postgres)
-- Register/login uses MySQL `users` (password hash with bcrypt).
-- Each identity is mirrored to Postgres `app_user`. The helper `ensureMysqlUserForEmail` keeps the MySQL side present so the Debezium CDC flow can mirror back into Postgres `user_mysql_mirror`.
+2.5 Failure modes & handling
+- Missing/expired token → `X-Session-Token-Used: false`; connection may still establish without user context.
+- Invalid SDP (not starting with `v=0`) → likely upstream error; client aborts and logs.
+- ICE/timeouts → wait for ICE complete before posting; retry with the same offer if needed.
 
-Tools (server behaviors behind `/tools/execute`)
-- Chat persistence: `create_chat_session`, `add_chat_turn`, `get_recent_chat`, `fetch_chat_history` — writes both Redis buffer and Postgres `chat_message` aggregated JSON per (session_id,user_id).
-- Preferences/agent: read/set language and agent name/settings. Settings enforce “self‑only” access; voice/style updates ask for a page reload.
-- Memory: `add_user_memory`, `get_user_memory` — atomic facts/preferences/goals/progress/open_questions with pinning/stability. The summarizer also extracts items automatically.
-- Courses/catalog: `list_courses` and `recommend_courses` compute local date/time fields and human “starts in …” labels; they dynamically adapt to mirror schema differences and merge with MySQL if mirrors lag.
-- Details and content: `get_event_details`, `get_event_summary` — normalize start times and serve saved HTML summaries when present.
-- Participation/favorites: `enter_event` and `user_favourite` write to MySQL and rely on CDC mirrors for reads.
-- Quizzes: `get_event_quiz` reads from mirror tables; `submit_event_quiz` persists attempts and item responses in MySQL and returns score/pass.
+2.6 Client call site (navigation)
+- Orchestrator: `startOpenAIRealtime()` → offer creation, ICE wait, POST `/realtime/sdp`, then `setRemoteDescription`.
+- See: [../compenion_ai.html#L627](../compenion_ai.html#L627) (entry) and [../server.js#L221](../server.js#L221) (proxy).
 
-Summarization pipeline
-- Transcript collection order: Postgres `chat_message` JSON → Redis buffer → fallback to row logs.
-- Model summary → `chat_session_summary` UPSERT; memory extraction (light hallucination guard via content‑word overlap) → `user_memory`; rolling digest update → `user_digest`.
-- Idle summarizer scans Redis keys `chat:last_activity:*` and finalizes inactive sessions with backoff on repeated failure.
-
-Security and privacy
-- All core routes require JWT (`authRequired` middleware). JWT is set as `auth` cookie and verified on each call.
-- Admin route `/tools/admin/delete_memories` is protected with `X-Admin-Token` and an env token.
-- In production, prefer explicit static mounts over serving the repo root.
+2.7 Term definitions
+- WebRTC: browser‑native real‑time media/data stack that creates encrypted peer connections (audio/video/data).
+- SDP (Session Description Protocol): plain‑text description of codecs, directions, ICE candidates, DTLS keys; browser sends Offer; OpenAI returns Answer.
+- ICE (Interactive Connectivity Establishment): discovers viable network paths; includes STUN (public IP discovery) and optional TURN (relay).
+- DTLS/SRTP: transport/security layers; DTLS protects SRTP media.
+- DataChannel: bidirectional, low‑latency channel over WebRTC for tool messages (`oai-events`).
+- Ephemeral token: short‑lived credential from `/realtime/token` (`client_secret.value`) that binds the session to server‑built `instructions`.
 
 ---
 
-## 3) Postgres helpers — retrieval.js
-High‑level: Postgres layer for chat/session storage, summaries and preferences, agent settings, lean user memory, plus a small pgvector knowledge base (KB).
+## 3) Client (compenion_ai.html) – Orchestrator, tools, and panels
 
-Functions
-- Sessions/messages: `createChatSession` [../retrieval.js#L13](../retrieval.js#L13), `addChatMessage` [../retrieval.js#L24](../retrieval.js#L24), `getRecentMessages` [../retrieval.js#L90](../retrieval.js#L90)
-- Summaries: `saveSessionSummary` [../retrieval.js#L103](../retrieval.js#L103), `readLatestSummary` [../retrieval.js#L115](../retrieval.js#L115)
-- Language: `readPreferredLanguagePg` [../retrieval.js#L128](../retrieval.js#L128), `setPreferredLanguagePg` [../retrieval.js#L136](../retrieval.js#L136)
-- Users/KB: `createUser` [../retrieval.js#L152](../retrieval.js#L152), `createKb` [../retrieval.js#L162](../retrieval.js#L162), `kbAddText` [../retrieval.js#L183](../retrieval.js#L183), `retrieveKb` [../retrieval.js#L222](../retrieval.js#L222)
-- Memory: `ensureMemoryTables` [../retrieval.js#L258](../retrieval.js#L258), `upsertUserMemoryItems` [../retrieval.js#L296](../retrieval.js#L296), `selectTopKUserMemory` [../retrieval.js#L319](../retrieval.js#L319), `setUserDigest` [../retrieval.js#L343](../retrieval.js#L343), `getUserDigest` [../retrieval.js#L354](../retrieval.js#L354), `getRecentSummaries` [../retrieval.js#L359](../retrieval.js#L359)
-- Agent settings: `readAgentNamePg` [../retrieval.js#L370](../retrieval.js#L370), `setAgentNamePg` [../retrieval.js#L378](../retrieval.js#L378), `readAgentSettingsPg` [../retrieval.js#L390](../retrieval.js#L390), `setAgentSettingsPg` [../retrieval.js#L403](../retrieval.js#L403)
+3.1 Orchestrator (runtime hub)
+- Entrypoint `startOpenAIRealtime()` [../compenion_ai.html#L627](../compenion_ai.html#L627): creates `RTCPeerConnection`, opens DataChannel `oai-events`, routes remote audio to `<audio id="remoteAudio">`, captures microphone (AEC/NS), fetches ephemeral token, performs SDP offer/answer via the proxy, registers tools, and installs message handling.
+- Caches user id with `getUserId()` [../compenion_ai.html#L1056](../compenion_ai.html#L1056) so client panels can be namespaced per user (e.g., code‑assist storage).
 
-Data model highlights
-- `chat_message` stores an aggregated JSON array per (session_id,user_id) with UTC timestamp plus a pre‑formatted local timestamp and turn counters for easy summarization.
-- `user_memory` holds atomic “facts/preferences/goals/progress/open_questions”. Ranking favors `pinned`, then `stability` (long→med→short), then recency.
-- KB chunking uses fixed‑size character windows (1200 chars, 200 overlap) and `text-embedding-3-small` by default. An ivfflat index speeds up cosine similarity.
+3.2 Remote audio & envelope bubble (UX)
+- Mood color setter `setMood(mood)` and an envelope‑driven `animateBubble()` [../compenion_ai.html#L661](../compenion_ai.html#L661), [../compenion_ai.html#L670](../compenion_ai.html#L670).
+- `setupEnvelopeProcessing(stream)` [../compenion_ai.html#L681](../compenion_ai.html#L681) uses AudioWorklet when available; falls back to an analyser RMS loop otherwise.
+
+3.3 Microphone capture & mute
+- `navigator.mediaDevices.getUserMedia({ audio: { echoCancellation, noiseSuppression } })` adds tracks to the peer connection.
+- Mute wiring disables both local track `enabled` and any `RTCRtpSender.track.enabled`; see toggle logic [../compenion_ai.html#L2270](../compenion_ai.html#L2270).
+
+3.4 Token mint + SDP handshake (ties to section 2)
+- Mint: client calls `/realtime/token` → receives `{ token, hasHistory, preferredVoice }`.
+- Handshake: creates offer, waits until ICE complete, POSTs `/realtime/sdp` with header `X-OpenAI-Session-Token: token`, then `setRemoteDescription(answer)` [../compenion_ai.html#L627](../compenion_ai.html#L627).
+
+3.5 Tools contract & handler
+- Registry: name + JSON schema for each tool [../compenion_ai.html#L861](../compenion_ai.html#L861).
+- Handler: deduplicates by `call_id` (using `processedToolCallIds`), accumulates streamed arguments in `pendingArgs`, executes UI/server logic, emits `function_call_output` back over the DataChannel, and triggers a brief spoken follow‑up when appropriate.
+
+3.6 Panels (tool‑driven surfaces)
+- Quiz modal: ensure UI, render question, open for event, submit and score [../compenion_ai.html#L1122](../compenion_ai.html#L1122), [../compenion_ai.html#L1134](../compenion_ai.html#L1134), [../compenion_ai.html#L1188](../compenion_ai.html#L1188).
+- Summary overlay: ensure, set title/body HTML, open [../compenion_ai.html#L1208](../compenion_ai.html#L1208), [../compenion_ai.html#L1225](../compenion_ai.html#L1225), [../compenion_ai.html#L1231](../compenion_ai.html#L1231).
+- Code‑assist panel: launcher + renderer; block composition (language, title, code, explanation, next actions) [../compenion_ai.html#L1366](../compenion_ai.html#L1366), [../compenion_ai.html#L1385](../compenion_ai.html#L1385).
+
+3.7 Events list & actions
+- Lists courses from server and renders cards with Enter/Quiz/Summary actions [../compenion_ai.html#L1249](../compenion_ai.html#L1249).
+
+3.8 Pacing & lifecycle (keep voice first sane)
+- Response pacing: `requestResponseSafe`, `waitForSessionUpdated`, `beginNoToolFollowup` [../compenion_ai.html#L1328](../compenion_ai.html#L1328), [../compenion_ai.html#L1342](../compenion_ai.html#L1342), [../compenion_ai.html#L1351](../compenion_ai.html#L1351).
+- Idle finalize + pagehide/visibility finalize [../compenion_ai.html#L1309](../compenion_ai.html#L1309), [../compenion_ai.html#L2340](../compenion_ai.html#L2340).
+- Mute toggle (tracks and senders) [../compenion_ai.html#L2270](../compenion_ai.html#L2270).
+
+3.9 3D Avatar (tool‑controlled, independent)
+- Scene/camera/lights; GLB loading; cross‑fades; simple autonomy; drag; small public API `window.AvatarController` [../compenion_ai.html#L345](../compenion_ai.html#L345), [../compenion_ai.html#L411](../compenion_ai.html#L411), [../compenion_ai.html#L476](../compenion_ai.html#L476), [../compenion_ai.html#L498](../compenion_ai.html#L498), [../compenion_ai.html#L594](../compenion_ai.html#L594).
+- Internals to know by name: `AnimationMixer`, `nameToAction`, `crossFadeTo`, `pendingMode`, `updateAutonomy`, `bounds`.
+
+3.10 Client‑side resilience
+- Graceful fallbacks: AudioWorklet → analyser RMS; token/SDP answer validation; retry‑safe ICE wait before posting offer; UI remains responsive even if remote audio or quiz/summary fetches fail.
+
+3.11 Extending the client safely
+- New tool: add JSON schema in the registry → handle in the message loop → render/update a small panel; keep spoken lines short.
+- New panel: keep it visually isolated (like quiz/summary/code‑assist) and return concise JSON from the server tool.
+- New data: fetch via server only; avoid direct DB calls from the client; keep the client stateless and contract‑driven.
 
 ---
 
-## 4) Redis helpers — redis.js
-High‑level: Minimal chat buffers and session activity tracking used for idle summarization.
+## 4) Server (server.js) – APIs, tools, summarization
 
-Functions
-- Client + connect: `createClient` [../redis.js#L6](../redis.js#L6), `connectRedis` [../redis.js#L15](../redis.js#L15)
-- Chat buffers: `addChatTurn` [../redis.js#L27](../redis.js#L27), `getRecentChat` [../redis.js#L40](../redis.js#L40), `getFullChat` [../redis.js#L46](../redis.js#L46)
-- Activity: `setSessionActivity` [../redis.js#L56](../redis.js#L56), `getSessionActivity` [../redis.js#L65](../redis.js#L65)
+4.1 Setup & static routing
+- Static routes (dev‑friendly, exposes workspace) and HTTP listen: [../server.js#L1952](../server.js#L1952), [../server.js#L2240](../server.js#L2240).
+- Note: In production narrow static mounts; keep GLB/worklets explicit.
 
-Key mechanics
-- Messages are appended to `chat:<sessionId>` with a TTL (default 24h); list is trimmed to a max length (`CHAT_BUFFER_MAX`).
-- `chat:last_activity:<sessionId>` tracks the last user/assistant activity timestamp used by the idle summarizer.
-- A separate `chat:session_user:<sessionId>` key maps sessions to Postgres user ids so the summarizer can attribute results.
+4.2 Auth & identity bridging
+- Register/Login/Logout over MySQL `users` with bcrypt hashing: [../server.js#L778](../server.js#L778), [../server.js#L829](../server.js#L829), [../server.js#L873](../server.js#L873).
+- Issues JWT cookie `{ email, pgUserId }`; `ensureMysqlUserForEmail(email)` keeps a MySQL row present for CDC mirrors; `createUser({ email })` (Postgres) bridges identities.
+
+4.3 User information APIs
+- `/me` returns the JWT payload: [../server.js#L911](../server.js#L911).
+- `/user/profile` reads MySQL basic profile (plus optional extras): [../server.js#L916](../server.js#L916).
+- `/user/context` pulls a rich context from Postgres mirrors (upcoming/attended, materials, transcripts, quizzes, favorites, categories): [../server.js#L942](../server.js#L942).
+
+4.4 Realtime endpoints (tie to sections 1 & 2)
+- `/realtime/token` builds `instructions` and mints an ephemeral token: [../server.js#L276](../server.js#L276).
+  - Inputs by name: `composeUserContextSummary`, `readPreferredLanguagePg`, `readAgentSettingsPg`, `selectTopKUserMemory`, `getRecentSummaries`, conversation excerpts from `chat_message`.
+  - Variables assembled: `preferredLanguage`, `preferredVoice`, `agentName`, `agentStyle`, `workingPack`, `recentSummariesBlock`, `recentConvosBlock`, `continuityBlock`, `instructionsFull`.
+- `/realtime/sdp` proxies the SDP offer to OpenAI Realtime and returns the SDP answer (same‑origin handshake): [../server.js#L221](../server.js#L221).
+
+4.5 Tools hub (contract‑first switchboard)
+- Entry: `POST /tools/execute` [../server.js#L1108](../server.js#L1108).
+- Call shape: `{ name, arguments }`; server logs the tool name and guards with `authRequired`.
+- Categories and notable behaviors:
+  - Chat/session: `create_chat_session`, `add_chat_turn`, `get_recent_chat`, `fetch_chat_history` (writes both Redis and Postgres aggregated JSON rows).
+  - Preferences/agent: `read_preferred_language`, `set_preferred_language`, `read_agent_name`, `set_agent_name`, `read_agent_settings`, `set_agent_settings` (self‑only; voice/style changes ask for reload).
+  - Memory: `add_user_memory` (single or batch) and `get_user_memory` (filter by type/limit). Uses `ensureMemoryTables`, `upsertUserMemoryItems`.
+  - Courses/catalog: `list_courses` dynamically detects mirror columns, merges with MySQL if needed, computes `start_local`, `start_date_local`, `start_time_local`, `start_weekday_local`, and `starts_in_human` via `computeRelative`; sorts by status.
+  - Recommendations: `recommend_courses` applies a days‑ahead window and returns localized fields + relative starts.
+  - Details/content: `get_event_details` normalizes timestamps across schemas; `get_event_summary` serves stored HTML or a graceful generated blurb.
+  - Participation/favorites: `enter_event` and `user_favourite` are idempotent MySQL writes; CDC mirrors back to Postgres for reads.
+  - Quizzes: `get_event_quiz` reads mirror tables; `submit_event_quiz` writes attempt headers and responses, returns `score`/`passed`.
+
+4.6 Summarization pipeline (session finalization)
+- Function: `summarizeAndSaveSession(sessionId, userId)` [../server.js#L1994](../server.js#L1994).
+- Steps by name:
+  1) Transcript assembly: prefer `chat_message` aggregated JSON → Redis buffer → fallback row logs.
+  2) Model summary: prompts using `OPENAI_SUMMARY_MODEL`; saves via `saveSessionSummary`.
+  3) Atomic memory extraction: parses model JSON; filters by content‑word overlap; `upsertUserMemoryItems` for durable items.
+  4) Rolling digest: `getRecentSummaries` → `setUserDigest`.
+
+4.7 Sessions endpoints
+- `/sessions/heartbeat` updates Redis `chat:last_activity:<sessionId>` and associates `chat:session_user:<sessionId>` [../server.js#L2124](../server.js#L2124).
+- `/sessions/finalize` runs summarization now or queues a background finalize [../server.js#L2147](../server.js#L2147).
+
+4.8 Idle summarizer loop
+- Periodically scans Redis idle keys; runs summarization with backoff on repeated failures: [../server.js#L2183](../server.js#L2183).
+
+4.9 Security & permissions
+- `authRequired` on `/realtime/*`, `/tools/execute`, `/sessions/*`.
+- Admin route `/tools/admin/delete_memories` requires `X-Admin-Token` [../server.js#L1923](../server.js#L1923).
+- Agent settings endpoints enforce self‑only updates/reads.
+
+4.10 Operational knobs (env)
+- OpenAI: `OPENAI_API_KEY`, `OPENAI_REALTIME_MODEL`, `OPENAI_SUMMARY_MODEL`.
+- Timezone & dates: `APP_TIMEZONE`.
+- Redis chat buffers: `CHAT_BUFFER_MAX`, `CHAT_BUFFER_TTL_SECONDS`.
+- Idle summarizer: `ENABLE_IDLE_SUMMARIZER`, `SESSION_IDLE_MS`, `IDLE_SUMMARIZER_INTERVAL_MS`.
 
 ---
 
-## 5) Database schemas
-- Postgres (app tables, KB, mirror indexes): [../db/init.sql#L1](../db/init.sql#L1)
-- MySQL (source‑of‑truth app schema): [../db/mysql-init.sql#L1](../db/mysql-init.sql#L1)
+## 5) Persistence Layer – Postgres & Redis
 
-Context
-- MySQL is the operational source of truth. Debezium (MySQL → Kafka) + JDBC Sink mirror selected tables into Postgres as `<name>_mysql_mirror`.
-- Postgres hosts app tables (chat, memory, preferences, KB). Mirror performance indexes are created in `db/init.sql`.
-- The server reads primarily from Postgres (including mirrors) and writes back to MySQL for participation/favorites/quizzes.
+5.1 Postgres helpers (retrieval.js)
+- Sessions/messages
+  - `createChatSession` [../retrieval.js#L13](../retrieval.js#L13): inserts a new session header (returns id) to associate future turns.
+  - `addChatMessage` [../retrieval.js#L29](../retrieval.js#L29): appends to a single aggregated JSON array per (session_id,user_id); stores UTC (`at`) and pre‑formatted local time (`at_local`) plus turn info.
+  - `getRecentMessages` [../retrieval.js#L90](../retrieval.js#L90): convenience read for debugging/inspection.
+- Summaries & preferences
+  - `saveSessionSummary` [../retrieval.js#L110](../retrieval.js#L110): UPSERTs the latest summary per (session_id,user_id).
+  - `readLatestSummary` [../retrieval.js#L115](../retrieval.js#L115): reads last saved summary for a user.
+  - `readPreferredLanguagePg` [../retrieval.js#L136](../retrieval.js#L136) / `setPreferredLanguagePg` [../retrieval.js#L144](../retrieval.js#L144): stores per‑user language preference.
+- Identity & agent personalization
+  - `createUser` [../retrieval.js#L161](../retrieval.js#L161): creates/ensures the Postgres identity.
+  - `readAgentNamePg` [../retrieval.js#L287](../retrieval.js#L287) / `setAgentNamePg` [../retrieval.js#L295](../retrieval.js#L295): preferred assistant name.
+  - `readAgentSettingsPg` [../retrieval.js#L307](../retrieval.js#L307) / `setAgentSettingsPg` [../retrieval.js#L320](../retrieval.js#L320): voice/style/name with partial update semantics.
+- Memory & digest
+  - `ensureMemoryTables` [../retrieval.js#L188](../retrieval.js#L188): guarantees `user_memory`, `user_digest`, and `user_agent_settings` exist (with indexes/constraints).
+  - `upsertUserMemoryItems` [../retrieval.js#L211](../retrieval.js#L211): inserts or refreshes atomic items; merges pinning/stability.
+  - `selectTopKUserMemory` [../retrieval.js#L233](../retrieval.js#L233): picks top‑K items per type (facts/preferences/goals/progress/open questions) using pin/stability/recency order.
+  - `setUserDigest` [../retrieval.js#L260](../retrieval.js#L260) / `getUserDigest` [../retrieval.js#L271](../retrieval.js#L271): manages a concise rolling digest per user.
+  - `getRecentSummaries` [../retrieval.js#L276](../retrieval.js#L276): pulls recent summaries (used by the summarizer to build the digest).
+
+Design notes (Postgres)
+- Conversation storage favors a single JSON blob per session/user for fast summarization and continuity reads; Redis covers hot tails.
+- Memory tables prioritize durability and de‑duplication (unique `(user_id, statement)`), with ranking fields that tune retrieval without complex vector infra.
+
+5.2 Redis helpers (redis.js)
+- Chat buffers
+  - `addChatTurn` [../redis.js#L31](../redis.js#L31): pushes `{ role, content, ts }` to `chat:<sessionId>` with TTL and trim to `CHAT_BUFFER_MAX`.
+  - `getRecentChat` / `getFullChat`: read back recent/full tails to reconstruct transcripts if Postgres aggregation is missing.
+- Session activity
+  - `setSessionActivity` [../redis.js#L63](../redis.js#L63): refreshes `chat:last_activity:<sessionId>` and maps the session to a user (`chat:session_user:<sessionId>`) for the idle summarizer.
+  - `getSessionActivity`: reads last activity timestamp.
+
+Design notes (Redis)
+- Redis acts as a fast, lossy buffer and heartbeat store; Postgres remains the durable source of session truth.
+- Idle summarizer only deletes the idle marker after a successful save (with backoff keys for repeated failures).
+
+5.3 Schemas (where to look)
+- Postgres app tables + mirror indexes: [../db/init.sql#L1](../db/init.sql#L1)
+- MySQL app schema (source of truth): [../db/mysql-init.sql#L1](../db/mysql-init.sql#L1)
 
 ---
 
-## 6) Reading tips
-- The server keeps most of the long‑form rationale in comments near the token minting instructions and summarization helper — skim those when making behavioral changes.
-- When adding a new tool, define its JSON schema in the client tools registry and implement a matching case in `POST /tools/execute`.
-- If you introduce new CDC mirrors, add read paths in `/user/context` and consider indexes in `db/init.sql`.
+## 6) Security, Ops, Extensibility
 
-Common flows (end‑to‑end)
-- First visit → register/login (MySQL) → cookie JWT issued.
-- Open app → client requests `/realtime/token` → server injects context + memory into `instructions` → client posts SDP to `/realtime/sdp` → assistant greets with onboarding.
-- During chat → model calls tools silently; client updates UI and server persists turns; heartbeats keep the session “active”.
-- On idle/close → client or idle summarizer finalizes → model produces a cumulative summary → atomic memory extracted; digest updated.
+6.1 Security model
+- Authentication & session: JWT cookie `auth`; middleware `authRequired` protects `/realtime/*`, `/tools/execute`, `/sessions/*` [../server.js#L206](../server.js#L206).
+- Authorization: agent settings endpoints (`read_agent_settings`, `set_agent_settings`) are self‑only; server validates `userId` matches cookie.
+- Secrets: client never sees `OPENAI_API_KEY`. Realtime uses an ephemeral token from `/realtime/token`; SDP proxy runs on the server.
+- Admin: `/tools/admin/delete_memories` requires `X-Admin-Token` [../server.js#L1923](../server.js#L1923).
+- Scope & safety: instructions include explicit guardrails (no camera/surveillance claims, short turns, single question at a time).
 
-Environment quick list
-- OpenAI: `OPENAI_API_KEY`, `OPENAI_REALTIME_MODEL`, `OPENAI_SUMMARY_MODEL`
-- Postgres: `DATABASE_URL`, `APP_TIMEZONE`
-- Redis: `REDIS_URL`, `CHAT_BUFFER_MAX`, `CHAT_BUFFER_TTL_SECONDS`
-- MySQL: `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DB`
-- Session/idle: `ENABLE_IDLE_SUMMARIZER`, `SESSION_IDLE_MS`, `IDLE_SUMMARIZER_INTERVAL_MS`
+6.2 Operations & tunables
+- Idle summarizer: `ENABLE_IDLE_SUMMARIZER`, `SESSION_IDLE_MS`, `IDLE_SUMMARIZER_INTERVAL_MS` control whether/when sessions finalize in the background [../server.js#L2176](../server.js#L2176).
+- Timezone & formatting: `APP_TIMEZONE` drives server‑side localization of dates/times and relative fields.
+- Redis chat buffers: `CHAT_BUFFER_MAX`, `CHAT_BUFFER_TTL_SECONDS` (see redis.js; defaults provide 24h retention with trimming).
+- OpenAI models: `OPENAI_REALTIME_MODEL` (realtime) and `OPENAI_SUMMARY_MODEL` (summaries/memory extraction).
+
+6.3 Extensibility patterns
+- New tool (most common):
+  1) Define its JSON schema in the client tools registry (name, description, parameters).
+  2) Implement its case inside `POST /tools/execute` (server) with clear outputs tailored for speech + UI.
+  3) Update instructions (when necessary) with when/how to call the tool.
+- New UI panel:
+  - Mirror “summary/quiz/code‑assist”: self‑contained surface; spoken output stays concise; the panel carries details.
+- New data field or table:
+  - Add Postgres readers/writers in `retrieval.js`; extend `/user/context` or the tool case in `server.js`; keep the client stateless and contract‑driven.
+- New avatar behavior:
+  - Extend `window.AvatarController` and add an animation clip/action; keep the mixer/crossfade pattern.
+
+6.4 Deployment notes (quick)
+- Narrow static mounts in production; avoid serving the repo root broadly.
+- Ensure TLS so DTLS/SRTP can negotiate cleanly in WebRTC (most browsers require https).
+- Monitor `/realtime/*` and `/tools/execute` latency; idle summarizer logs can surface summarization failures/backoffs.

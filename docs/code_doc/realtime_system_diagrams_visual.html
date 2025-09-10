@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Realtime System Diagrams</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Mermaid CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
+    .page { padding: 24px; display: grid; gap: 24px; }
+    h1 { font-size: 26px; margin: 0; font-weight: 800; letter-spacing: -0.2px; }
+    h2 { font-size: 18px; margin: 0; font-weight: 700; }
+    p  { margin: 0; }
+    .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .toolbar { display: flex; gap: 10px; margin: 8px 0; position: relative; z-index: 10; flex-wrap: wrap; }
+    .btn {
+      padding: 6px 10px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; color: #111;
+      cursor: pointer; text-decoration: none; display: inline-block; user-select: none;
+    }
+    .btn[disabled] { background: #f3f4f6; color: #9ca3af; border-color: #e5e7eb; cursor: not-allowed; }
+    .card {
+      position: relative; z-index: 0; overflow: auto; background: #fff; border: 1px solid #e5e7eb;
+      border-radius: 16px; padding: 12px; min-height: 80px;
+    }
+    .hint { font-size: 12px; opacity: .85; }
+    /* Ensure the diagram never overlays the toolbar */
+    .card svg { max-width: 100%; pointer-events: auto; }
+    .ok { color: #16a34a; font-size: 12px; }
+    .err { color: #dc2626; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>Realtime System Diagrams</h1>
+      <p class="hint">Interactive Mermaid render of your sequence and component overviews.</p>
+    </header>
+
+    <!-- Sequence section -->
+    <section id="seq-sec">
+      <div class="row">
+        <h2>A) Sequence – page load to finalization</h2>
+        <span id="seq-status" class="hint">Rendering…</span>
+      </div>
+      <div class="toolbar">
+        <a id="seq-svg" class="btn" download="sequence-diagram.svg" aria-disabled="true">Download SVG</a>
+        <button id="seq-png" class="btn" disabled>Download PNG</button>
+      </div>
+      <div id="seq-card" class="card"></div>
+    </section>
+
+    <!-- Component section -->
+    <section id="comp-sec">
+      <div class="row">
+        <h2>B) Component overview – responsibilities</h2>
+        <span id="comp-status" class="hint">Rendering…</span>
+      </div>
+      <div class="toolbar">
+        <a id="comp-svg" class="btn" download="component-diagram.svg" aria-disabled="true">Download SVG</a>
+        <button id="comp-png" class="btn" disabled>Download PNG</button>
+      </div>
+      <div id="comp-card" class="card"></div>
+    </section>
+
+    <footer class="hint">
+      <p><strong>Legend</strong>: Ephemeral token binds session to user instructions; “Summary” is saved at finalize and extracts durable memory; “Memory” stores atomic facts in Postgres.</p>
+      <p><strong>Navigation</strong>: Client code in <code>compenion_ai.html</code>; server endpoints in <code>server.js</code>; Postgres helpers <code>retrieval.js</code>; Redis <code>redis.js</code>; schemas in <code>db/init.sql</code> and <code>db/mysql-init.sql</code>.</p>
+    </footer>
+  </div>
+
+  <script>
+    // Mermaid init
+    mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: "base", themeVariables: { background: "#ffffff" } });
+
+    // The two diagrams (escaped where needed)
+    const sequenceDiagram = `
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant C as Browser (compenion_ai.html)
+    participant S as Server (server.js)
+    participant O as OpenAI Realtime
+    participant R as Redis
+    participant P as Postgres
+    participant M as MySQL
+
+    U->>S: GET /
+    S-->>U: compenion_ai.html (if JWT) or login.html
+    Note over C: DOMContentLoaded → init avatar → startOpenAIRealtime()
+
+    C->>S: GET /realtime/token (JWT cookie)
+    S->>P: composeUserContextSummary
+    S->>P: readPreferredLanguagePg
+    S->>P: readAgentSettingsPg
+    S->>P: selectTopKUserMemory
+    S->>P: getRecentSummaries
+    S-->>C: { token (ephemeral), hasHistory, preferredVoice }
+
+    C->>C: RTCPeerConnection + DataChannel + mic + hidden <audio>
+    C->>S: POST /realtime/sdp (offer, X-OpenAI-Session-Token)
+    S->>O: POST /v1/realtime?model=... (offer)
+    O-->>S: SDP answer
+    S-->>C: SDP answer
+    C->>C: setRemoteDescription → ontrack (assistant audio)
+
+    loop Tool-driven turns
+        Note over O C: Model decides to call a tool
+        C->>S: POST /tools/execute { name, arguments }
+        alt Reads/Writes
+            S->>M: read/write app tables (events, attendance, favorites, quizzes)
+            S->>P: read mirrors / user data (context, summaries, memory)
+            S->>R: chat tail / last activity as needed
+        end
+        S-->>C: tool result (compact JSON)
+        C-->>O: function_call_output (via DataChannel)
+        C->>C: Update UI (summary/quiz/code-assist) + brief spoken line
+    end
+
+    Note over C S R: Heartbeats keep session active
+    C->>S: POST /sessions/heartbeat
+    S->>R: set chat:last_activity:<sessionId>
+
+    par Client-initiated finalize
+        C->>S: POST /sessions/finalize (keepalive on pagehide/idle)
+    and Idle summarizer
+        S->>R: scan idle keys → if idle → finalize in background
+    end
+
+    S->>P: summarizeAndSaveSession → saveSessionSummary
+    S->>P: upsertUserMemoryItems → setUserDigest
+    S-->>C: { ok: true, saved: true }
+`;
+
+    const componentDiagram = `
+flowchart LR
+    subgraph Browser [Browser]
+        UI[UI Surfaces\\nsummary · quiz · code-assist]
+        AV[3D Avatar\\nAnimationMixer + AvatarController]
+        RTC[WebRTC Orchestrator\\nRTCPeerConnection + DataChannel]
+        TOOLS[Tools Registry + Handler]
+    end
+
+    subgraph Server [Node/Express]
+        TOKEN[/realtime/token\\nbuild instructions + mint token/]
+        SDP[/realtime/sdp\\nWebRTC proxy/]
+        EXEC[/tools/execute\\nserver tools switchboard/]
+        SESS[/sessions/*\\nheartbeat/finalize + idle summarizer/]
+    end
+
+    subgraph Data [Data Layer]
+        PG[(Postgres\\nchat JSON, summaries, memory, agent settings)]
+        MY[(MySQL\\nusers, events, favorites, attendance, quizzes)]
+        RD[(Redis\\nchat tail, last_activity)]
+    end
+
+    subgraph OpenAI [OpenAI]
+        OA([Realtime audio and data])
+        SUM([Summarization Model])
+    end
+
+    UI <--> TOOLS
+    TOOLS <--> RTC
+    RTC --> TOKEN
+    RTC --> SDP
+    TOKEN --> PG
+    EXEC --> PG
+    EXEC --> MY
+    EXEC --> RD
+    SDP <--> OA
+    SESS --> RD
+    SESS --> PG
+    SESS --> SUM
+`;
+
+    // Helpers
+    function setStatus(id, ok, msg) {
+      const el = document.getElementById(id);
+      el.textContent = msg || (ok ? "Diagram ready" : "Rendering…");
+      el.className = ok ? "ok" : "hint";
+    }
+
+    function setError(id, message) {
+      const el = document.getElementById(id);
+      el.textContent = "Error: " + message;
+      el.className = "err";
+    }
+
+    // Ensure exported SVG has an opaque white background
+    function ensureSvgWhiteBackground(svgText) {
+      if (typeof svgText !== "string") return svgText;
+      const openIdx = svgText.indexOf("<svg");
+      if (openIdx === -1) return svgText;
+      const firstClose = svgText.indexOf(">", openIdx);
+      if (firstClose === -1) return svgText;
+      const injection = '<rect x="0" y="0" width="100%" height="100%" fill="#ffffff"/>';
+      return svgText.slice(0, firstClose + 1) + injection + svgText.slice(firstClose + 1);
+    }
+
+    async function renderDiagram(def, containerId, statusId, svgLinkId, pngBtnId, pngName) {
+      try {
+        mermaid.parse(def); // compile-time validation
+      } catch (e) {
+        setError(statusId, e && e.message ? e.message : String(e));
+        return;
+      }
+
+      try {
+        const { svg } = await mermaid.render("id-" + Math.random().toString(36).slice(2, 9), def);
+        const svgWithBg = ensureSvgWhiteBackground(svg);
+        const container = document.getElementById(containerId);
+        container.innerHTML = svgWithBg;
+
+        // Keep raw SVG text (no fetch needed)
+        const svgText = svgWithBg;
+
+        // Enable SVG download using a data URL (no blob:)
+        const svgDataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgText);
+        const svgLink = document.getElementById(svgLinkId);
+        svgLink.href = svgDataUrl;
+        svgLink.removeAttribute("aria-disabled");
+
+        // PNG button: render from in-memory SVG text to a canvas, then download
+        const pngBtn = document.getElementById(pngBtnId);
+        pngBtn.disabled = false;
+        pngBtn.onclick = () => {
+          const scale = 2; // change to 3 for 3×, etc.
+          const img = new Image();
+          img.onload = () => {
+            const w = img.naturalWidth || 1600;
+            const h = img.naturalHeight || 900;
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.max(1, Math.floor(w * scale));
+            canvas.height = Math.max(1, Math.floor(h * scale));
+            const ctx = canvas.getContext("2d");
+            // Paint opaque white background first
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.setTransform(scale, 0, 0, scale, 0, 0);
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob((blob) => {
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = pngName;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+            }, "image/png");
+          };
+          img.src = svgDataUrl; // no fetch
+        };
+
+        setStatus(statusId, true, "Diagram ready");
+      } catch (e) {
+        setError(statusId, e && e.message ? e.message : String(e));
+      }
+    }
+
+    // Try to load Mermaid blocks from docs/ARCHITECTURE_DIAGRAM.md, fallback to inline
+    function extractDiagramsFromMarkdown(md) {
+      const result = { sequence: null, component: null };
+      if (!md || typeof md !== "string") return result;
+
+      const fenceRegex = /```mermaid\n([\s\S]*?)```/g;
+      const blocks = [];
+      let m;
+      while ((m = fenceRegex.exec(md)) !== null) {
+        const def = (m[1] || "").trim();
+        if (def) blocks.push(def);
+      }
+
+      for (const def of blocks) {
+        const lower = def.toLowerCase();
+        if (!result.sequence && lower.includes("sequencediagram")) {
+          result.sequence = def;
+          continue;
+        }
+        if (!result.component && (lower.includes("flowchart") || lower.includes("graph"))) {
+          result.component = def;
+          continue;
+        }
+      }
+      return result;
+    }
+
+    async function tryLoadMarkdownDiagrams() {
+      const mdPaths = [
+        "./docs/ARCHITECTURE_DIAGRAM.md",
+        "/docs/ARCHITECTURE_DIAGRAM.md"
+      ];
+      for (const path of mdPaths) {
+        try {
+          const res = await fetch(path, { cache: "no-store" });
+          if (!res.ok) continue;
+          const text = await res.text();
+          const { sequence, component } = extractDiagramsFromMarkdown(text);
+          if (sequence || component) {
+            return { sequence, component };
+          }
+        } catch (_) {
+          // ignore and try next path
+        }
+      }
+      return { sequence: null, component: null };
+    }
+
+    (async function init() {
+      const loaded = await tryLoadMarkdownDiagrams();
+      const seqDef = loaded.sequence || sequenceDiagram;
+      const compDef = loaded.component || componentDiagram;
+
+      renderDiagram(
+        seqDef,
+        "seq-card",
+        "seq-status",
+        "seq-svg",
+        "seq-png",
+        "sequence-diagram.png"
+      );
+      renderDiagram(
+        compDef,
+        "comp-card",
+        "comp-status",
+        "comp-svg",
+        "comp-png",
+        "component-diagram.png"
+      );
+    })();
+  </script>
+</body>
+</html>

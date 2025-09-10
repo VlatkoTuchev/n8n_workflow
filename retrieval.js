@@ -3,8 +3,7 @@
 // - Retrieval layer for Postgres. See docs/CODE_OVERVIEW.md → "Postgres helpers — retrieval.js".
 // ====================================================================================================
 const { query, pool } = require('./db');
-const crypto = require('crypto');
-const { embedText } = require('./embed');
+// Embeddings/KB removed: no longer importing './embed'
 
 // ====================================================================================================
 // Section: Chat sessions and messages
@@ -154,9 +153,8 @@ async function setPreferredLanguagePg({ userId, language }) {
 }
 
 // ====================================================================================================
-// Section: Users + Knowledge Base (KB)
-// - Lightweight KB for small text corpora using pgvector
-// - Default embeddings: text-embedding-3-small (1536 dims), configured in embed.js
+// Section: Users (identity records only)
+// - KB functions removed (no embeddings / vector search in this setup)
 // ====================================================================================================
 // [RT3] Users & KB
 async function createUser({ email }) {
@@ -169,87 +167,8 @@ async function createUser({ email }) {
   return { id: res.rows[0].id };
 }
 
-async function createKb({ ownerUserId, name, visibility = 'private' }) {
-  const res = await query(
-    `INSERT INTO kb (owner_user_id, name, visibility)
-     VALUES ($1, $2, $3) RETURNING id`,
-    [ownerUserId || null, name, visibility]
-  );
-  return { id: res.rows[0].id };
-}
-
-function chunkByChars(text, size = 1200, overlap = 200) {
-  const out = [];
-  let i = 0;
-  while (i < text.length) {
-    const end = Math.min(text.length, i + size);
-    out.push(text.slice(i, end));
-    if (end === text.length) break;
-    i = end - Math.min(overlap, size);
-  }
-  return out;
-}
-
-async function kbAddText({ kbId, title = 'Untitled', text, mimeType = 'text/plain', metadata }) {
-  if (!kbId || !text) throw new Error('kbId and text are required');
-  const docRes = await query(
-    `INSERT INTO kb_document (kb_id, source_uri, title, mime_type, metadata)
-     VALUES ($1, NULL, $2, $3, $4) RETURNING id`,
-    [kbId, title, mimeType, metadata || {}]
-  );
-  const documentId = docRes.rows[0].id;
-
-  const revRes = await query(
-    `SELECT COALESCE(MAX(rev),0)+1 AS next_rev FROM kb_document_revision WHERE document_id = $1`,
-    [documentId]
-  );
-  const rev = revRes.rows[0].next_rev;
-  const sha = crypto.createHash('sha256').update(text, 'utf8').digest();
-
-  const revInsert = await query(
-    `INSERT INTO kb_document_revision (document_id, rev, content_sha256, chunking_params)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [documentId, rev, sha, { size: 1200, overlap: 200 }]
-  );
-  const revisionId = revInsert.rows[0].id;
-
-  const chunks = chunkByChars(text, 1200, 200);
-  const embeddings = await embedText(chunks);
-  let inserted = 0;
-  for (let i = 0; i < chunks.length; i++) {
-    const vecLiteral = '[' + embeddings[i].join(',') + ']';
-    const tokenCount = Math.ceil(chunks[i].length / 4);
-    await query(
-      `INSERT INTO kb_chunk (revision_id, chunk_index, text, token_count, embedding, metadata)
-       VALUES ($1, $2, $3, $4, $5::vector, $6)`,
-      [revisionId, i, chunks[i], tokenCount, vecLiteral, {}]
-    );
-    inserted++;
-  }
-  return { documentId, revisionId, chunks: inserted };
-}
-
-async function retrieveKb({ kbId, queryText, topK = 8 }) {
-  const [qvec] = await embedText(queryText);
-  const vecLiteral = '[' + qvec.join(',') + ']';
-  const res = await query(
-    `
-    SELECT c.id, d.title, c.text,
-           1 - (c.embedding <=> $1::vector) AS score
-    FROM kb_chunk c
-    JOIN kb_document_revision r ON c.revision_id = r.id
-    JOIN kb_document d ON r.document_id = d.id
-    WHERE d.kb_id = $2
-    ORDER BY c.embedding <-> $1::vector
-    LIMIT $3
-    `,
-    [vecLiteral, kbId, topK]
-  );
-  return res.rows;
-}
-
 module.exports = {
-  createUser, createKb, kbAddText, retrieveKb,
+  createUser,
   createChatSession,
   addChatMessage, getRecentMessages,
   saveSessionSummary, readLatestSummary,
