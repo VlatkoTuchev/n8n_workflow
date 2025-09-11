@@ -13,6 +13,7 @@
 //                              summarizeAndSaveSession
 const express = require('express');
 const path = require('path');
+const fs = require('fs/promises');
 const cors = require('cors');
 require('dotenv').config();
 const { query } = require('./db');
@@ -279,188 +280,92 @@ app.all('/realtime/token', authRequired, async (req, res) => {
 
     const model = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
     const fetchImpl = global.fetch || (async (...args) => (await import('node-fetch')).default(...args));
-    // Ensure user exists in MySQL so CDC mirrors have the user row
-    try { await ensureMysqlUserForEmail(req.user?.email || null, null); } catch(_) {}
-    // Build compact user context for instructions (no prior-session continuation)
-    let contextSummary = '';
-    try { contextSummary = await composeUserContextSummary(req.user?.email || null, req.user?.pgUserId || null); } catch (_) {}
-    // Preferred language guardrail (always respond in user's preferred language unless they confirm a change)
-    let preferredLanguage = null;
+    // New flow: load exported per-user prompt from filesystem and avoid per-request SQL.
     try {
-      if (req.user?.pgUserId) {
-        const langRow = await readPreferredLanguagePg({ userId: req.user.pgUserId });
-        preferredLanguage = langRow && langRow.language ? String(langRow.language) : null;
-      }
-    } catch (_) {}
-    // Read agent personalization (persisted per user)
-    let preferredVoice = 'alloy';
-    let agentName = null;
-    let agentStyle = null;
-    try {
-      if (req.user?.pgUserId) {
-        const settings = await readAgentSettingsPg({ userId: req.user.pgUserId });
-        const v = settings && settings.voice ? String(settings.voice).toLowerCase() : null;
-        if (v === 'alloy' || v === 'cedar') preferredVoice = v;
-        agentName = settings && settings.name ? String(settings.name) : null;
-        agentStyle = settings && settings.style ? String(settings.style) : null;
-      }
-    } catch (_) {}
-    // Compose Working Memory Pack from user_memory (if available)
-    let workingPack = '';
-    try {
-      const top = await selectTopKUserMemory(req.user?.pgUserId || null, null);
-      const lines = [];
-      function pushSection(title, rows) {
-        if (!rows || rows.length === 0) return;
-        lines.push(`${title}:`);
-        for (const r of rows) { lines.push(`- ${r.statement}`); }
-        lines.push('');
-      }
-      pushSection('Facts', top?.facts);
-      pushSection('Preferences', top?.preferences);
-      pushSection('Goals', top?.goals);
-      pushSection('Progress', top?.progress);
-      pushSection('Open Questions', top?.open_questions);
-      workingPack = lines.join('\n').trim();
-    } catch (_) {}
-    // Build last summaries (newest first), deduplicate and filter for recency and off-topic drift
-    let recentSummariesBlock = '';
-    try {
-      const rs = await query(
-        `SELECT summary, created_at FROM chat_session_summary
-           WHERE user_id = $1 AND summary IS NOT NULL
-           ORDER BY created_at DESC
-           LIMIT 6`,
-        [req.user?.pgUserId || null]
-      );
-      if (rs && rs.rows && rs.rows.length) {
-        const kept = [];
-        const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\s]+/g,' ').replace(/\s+/g,' ').trim();
-        function jaccard(a, b) {
-          const sa = new Set(a.split(' '));
-          const sb = new Set(b.split(' '));
-          const inter = new Set([...sa].filter(x => sb.has(x)));
-          const uni = new Set([...sa, ...sb]);
-          return uni.size ? inter.size / uni.size : 0;
+      const email = req.user?.email ? String(req.user.email) : null;
+      const sanitized = email ? email.replace(/[\\/]/g, '') : null;
+      const promptsDir = path.join(__dirname, 'scripts', 'exports', 'user_prompts');
+      let instructions = '';
+      let hasHistory = false;
+      try {
+        if (sanitized) {
+          const filePath = path.join(promptsDir, `${sanitized}.txt`);
+          instructions = await fs.readFile(filePath, 'utf8');
+          hasHistory = /Recent (conversation|session summaries)|Last conversation/i.test(instructions);
         }
-        for (let i = 0; i < rs.rows.length; i++) {
-          const txt = String(rs.rows[i].summary || '').trim();
-          const n = norm(txt);
-          let similar = false;
-          for (const k of kept) {
-            if (jaccard(n, k.n) >= 0.82) { similar = true; break; }
-          }
-          if (!similar) kept.push({ n, row: rs.rows[i] });
-          if (kept.length >= 1) break; // keep only the single clearest recent summary
-        }
-        if (kept.length) {
-          // Recency and topic filters
-          const row = kept[0].row;
-          const created = row.created_at ? new Date(row.created_at) : null;
-          const ageMin = created ? Math.floor((Date.now() - created.getTime())/60000) : null;
-          const textLower = String(row.summary || '').toLowerCase();
-          const offTopicHints = ['fitness','workout','morning routine','diet'];
-          const offTopic = offTopicHints.some(t => textLower.includes(t));
-          if (ageMin != null && ageMin <= 360 && !offTopic) {
-            const iso = created ? created.toISOString() : 'unknown-date';
-            recentSummariesBlock = `S1 [${iso}]: ${String(row.summary || '').trim()}`;
-          } else {
-            recentSummariesBlock = '';
-          }
-        }
+      } catch (_) {
+        instructions = '';
       }
-    } catch (_) {}
 
-    // Build last 2 conversation excerpts (from chat_message JSON) for smooth continuation
-    let recentConvosBlock = '';
-    let lastConversationUpdatedAt = null;
-    // Try to fetch display name for meta-guidance
-    let userDisplayName = null;
-    try {
-      if (req.user?.email) {
-        const r = await query(`SELECT name FROM user_mysql_mirror WHERE email = $1 LIMIT 1`, [req.user.email]);
-        userDisplayName = (r && r.rows && r.rows[0] && r.rows[0].name) || null;
+      if (!instructions || !instructions.trim()) {
+        const now = new Date();
+        const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
+        let nowLocal;
+        try {
+          nowLocal = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).format(now);
+        } catch { nowLocal = now.toISOString(); }
+        instructions = [
+          'Identity & personality: You are Nova, a friendly, upbeat learning companion. Keep responses short, clear, and practical.',
+          'Environment: Voice-first. Keep turns 2–4 sentences.',
+          'Top Priority — Onboarding: Ask for language preference first, then the 5 short questions (goal, domain, AI level, motivation, pace). One question per turn.',
+          'Language Policy: Start in English until the user chooses another language.',
+          `Current date/time (${tz}): ${nowLocal}`,
+          'Continuity: First session detected — do not assume prior context.'
+        ].join('\n\n');
+        hasHistory = false;
       }
-      if (!userDisplayName && req.user?.email) {
-        userDisplayName = String(req.user.email).split('@')[0];
-      }
-    } catch (_) {}
-    // Placeholders for strict continuation anchor derived from the last user message
-    let anchorText = null;
-    let anchorWhenLocal = null;
-    let anchorWhenIso = null;
-    try {
-      const excerptSessions = Math.max(1, Math.min(10, Number(process.env.CONVO_EXCERPT_SESSIONS || 8)));
-      const tailTurns = Math.max(6, Math.min(30, Number(process.env.CONVO_TAIL_TURNS || 18)));
-      const rows = await query(
-        `SELECT content, updated_at
-           FROM chat_message
-          WHERE user_id = $1
-          ORDER BY updated_at DESC
-          LIMIT ${excerptSessions}`,
-        [req.user?.pgUserId || null]
-      );
-      if (rows && rows.rows && rows.rows.length) {
-        const chunks = [];
-        for (let i = 0; i < rows.rows.length; i++) {
-          const r = rows.rows[i];
-          const updated = r.updated_at ? new Date(r.updated_at) : null;
-          if (i === 0) lastConversationUpdatedAt = updated;
-          let arr = [];
-          try { arr = Array.isArray(r.content) ? r.content : JSON.parse(r.content || '[]'); } catch (_) { arr = []; }
-          // Take the last N turns for continuity (configurable)
-          const tail = Array.isArray(arr) ? arr.slice(-tailTurns) : [];
-          let hasUserTurn = false;
-          // Compute anchor from the last USER message (only on most recent row)
-          if (i === 0 && Array.isArray(arr) && arr.length) {
-            for (let j = arr.length - 1; j >= 0; j--) {
-              const m = arr[j];
-              if (m && (m.role === 'user' || m.role === 'User')) {
-                const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
-                anchorText = (m.text != null ? String(m.text) : String(m?.content || '')).trim();
-                if (m && typeof m.at_local === 'string' && m.at_local.trim()) {
-                  anchorWhenLocal = `${m.at_local} ${tz}`;
-                } else if (m && typeof m.at === 'string' && m.at.trim()) {
-                  try { const d = new Date(m.at); const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }); anchorWhenLocal = `${fmt.format(d)} ${tz}`; anchorWhenIso = d.toISOString(); } catch(_) {}
-                }
-                break;
-              }
-            }
-          }
-          const lines = tail.map(m => {
-            const role = (m && m.role === 'model') ? 'Assistant' : 'User';
-            if (role === 'User') hasUserTurn = true;
-            const text = (m && m.text != null) ? String(m.text) : String(m?.content || '');
-            // Prefer local timestamp if present in stored JSON
-            const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
-            let whenLocal = null;
-            if (m && typeof m.at_local === 'string' && m.at_local.trim()) {
-              whenLocal = `${m.at_local} ${tz}`;
-            } else if (m && typeof m.at === 'string' && m.at.trim()) {
-              try {
-                const d = new Date(m.at);
-                const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12: false });
-                whenLocal = `${fmt.format(d)} ${tz}`;
-              } catch(_) { whenLocal = null; }
-            }
-            const prefix = whenLocal ? `${role} [${whenLocal}]` : role;
-            return `${prefix}: ${text.trim()}`;
-          });
-          const iso = updated ? updated.toISOString() : 'unknown-date';
-          let updatedLocal = null;
+
+      const preferredVoice = 'alloy';
+
+      async function postSessionWithRetry(payload, attempts = 2) {
+        let lastErr = null;
+        const timeoutMs = Math.max(3000, Number(process.env.REALTIME_TOKEN_TIMEOUT_MS || 10000));
+        for (let i = 1; i <= attempts; i++) {
+          const controller = new AbortController();
+          const t = setTimeout(() => controller.abort(), timeoutMs);
           try {
-            if (updated) {
-              updatedLocal = new Intl.DateTimeFormat('en-GB', { timeZone: String(process.env.APP_TIMEZONE || 'Europe/Skopje'), year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).format(updated);
-            }
-          } catch(_) { updatedLocal = null; }
-          const header = updatedLocal ? `Conversation [${iso} | local ${updatedLocal}]` : `Conversation [${iso}]`;
-          if (hasUserTurn) {
-            chunks.push(`${header}\n${lines.join('\n')}`);
+            const resp = await fetchImpl('https://api.openai.com/v1/realtime/sessions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+                'OpenAI-Beta': 'realtime=v1'
+              },
+              body: JSON.stringify(payload),
+              signal: controller.signal
+            });
+            clearTimeout(t);
+            return resp;
+          } catch (e) {
+            clearTimeout(t);
+            lastErr = e;
+            if (i < attempts) { await new Promise(r => setTimeout(r, 600 * i)); continue; }
+            throw e;
           }
         }
-        recentConvosBlock = chunks.join('\n\n');
+        throw lastErr || new Error('realtime session post failed');
       }
+
+      const upstream = await postSessionWithRetry({
+        model,
+        modalities: ['audio', 'text'],
+        voice: preferredVoice,
+        instructions
+      });
+      let data = null;
+      try { data = await upstream.json(); } catch (_) { data = null; }
+      if (!upstream.ok) return res.status(upstream.status || 502).json(data || { error: 'upstream_failed' });
+      const token = data?.client_secret?.value;
+      if (!token) return res.status(500).json({ error: 'No client token in response' });
+      return res.json({ token, hasHistory, preferredVoice });
     } catch (_) {}
+    // SQL-based context building removed; using exported per-user prompt files instead
+    // Preferred language is now encoded in exported prompt; no DB reads here
+    // Agent personalization (voice/name/style) should be baked into exported prompt if needed
+    // Working Memory Pack now comes from exported prompt
+    // Recent summaries are embedded in the exported prompt snapshot
+
+    // Recent conversation excerpts and anchors are included in the exported prompt snapshot
     const baseInstructions = `Identity & personality: By default you are Nova, a friendly, upbeat learning companion with a touch of humor. If an "Agent name policy" is provided in these instructions, use that name instead of Nova. If an "Agent style preference" is provided, adopt that style while keeping responses clear and concise. You continue conversations smoothly, as if we just paused and resumed. You adapt to the learner’s level and mood, stay practical, and keep the pace comfortable.
 
 Environment: Voice‑first in the Compenion AI web app. Speak clearly. Keep turns short (2–4 sentences), natural, and easy to follow.
@@ -605,167 +510,12 @@ Safety & inclusion: Be culturally respectful; avoid probing sensitive info; norm
         hour12: false
       }).format(now);
     } catch (_) { nowLocal = now.toLocaleString('en-GB'); }
-    const hasHistory = Boolean((recentSummariesBlock && recentSummariesBlock.length) || (recentConvosBlock && recentConvosBlock.length));
-    const continuityBlock = hasHistory
-      ? `Continuity:\n- You DO have prior context in this prompt.\n- Continue from the newest summary/excerpt.\n- Reference at most one prior detail.\n- Do NOT claim memory beyond what is shown here.`
-      : `Continuity:\n- This is the FIRST interaction; there is NO previous session.\n- Do NOT say we spoke before. Do NOT invent past details.\n- Start fresh with a concise, engaging opener and one question.`;
+    // hasHistory/continuity handled by exported prompt; legacy computed values removed
 
-    const insParts = [
-      baseInstructions,
-      // Hard onboarding gate inserted early so it doesn't get overridden by later guidance
-      `Top Priority — Onboarding Gate:\n- You must treat onboarding as REQUIRED when starting a new session or when answers are missing.\n- Required order:\n  0) Language choice — Ask if they prefer English or another language (examples: Macedonian, Albanian, Serbian, Greek). Wait for the answer; if they choose another, call set_preferred_language and continue in that language.\n  1) Primary outcome with AI (save as goal).\n  2) Work area / domain (save as fact).\n  3) Current AI level (save as fact).\n  4) Why now / motivation (save as preference).\n  5) Monthly learning pace (save as preference).\n- One question per turn. After each answer, immediately call add_user_memory with { type, statement }.\n- Do NOT proceed to general topics or recommendations until all five answers are captured. After the last answer, list 2–3 upcoming matching courses and offer to open a summary or mark attendance.`,
-      continuityBlock,
-      (preferredLanguage
-        ? `Language Policy:\n- First‑turn exception: confirm you can continue in ${preferredLanguage} or offer to switch (e.g., Macedonian, Albanian, Serbian, Greek). If they choose another, call set_preferred_language and continue in that language.\n- RESPOND ONLY IN ${preferredLanguage} after language choice is confirmed.\n- Do NOT switch languages unless the user explicitly asks to change language.\n- If the user asks to change, briefly confirm, call set_preferred_language, and continue in the new language immediately thereafter.\n- If incoming speech is in a different language, ask a one-line confirmation before switching.`
-        : `Language Policy (no preference saved):\n- On the very first turn you MUST ask: “Would you like to continue in English, or switch languages?” Offer examples inline (e.g., Macedonian, Albanian, Serbian, Greek).\n- Wait for the answer. If they choose a language, call set_preferred_language and then continue the onboarding in that language.\n- Until a choice is made, speak in English.`),
-      `Current date/time (${tz}): ${nowLocal}`,
-      `Current date/time (UTC): ${nowIso}`
-    ];
-    if (agentName) insParts.push(`Agent name policy:\n- Your current name is "${agentName}" (this is the ASSISTANT'S name).\n- When asked your name, answer using this name verbatim (e.g., "I'm ${agentName}").\n- NEVER address the learner by this name.\n- Override any earlier mentions or defaults (do NOT use "Nova" unless this policy sets it).\n- If the learner asks to change it, confirm and adapt.`);
-    if (agentStyle) insParts.push(`Agent style preference:\n- Maintain this baseline style across turns: ${agentStyle}.\n- Keep responses clear, concise, and on-task while reflecting the style.\n- If the learner asks to change it, confirm and adapt.`);
-    if (contextSummary) insParts.push(`Context for personalization:\n${contextSummary}`);
-    // Provide a clear user display name for greetings to avoid confusing the assistant name with the user name
-    if (userDisplayName) {
-      insParts.push(`User identity:\n- Preferred display name for the learner: ${userDisplayName}.\n- Use this name (or second-person "you"). Do NOT call the learner by your own agent name.`);
-    }
-    if (hasHistory && recentSummariesBlock) insParts.push(`Recent session summaries (NEWEST FIRST; prefer newest on conflict):\n${recentSummariesBlock}`);
-    if (hasHistory && workingPack) insParts.push(`Working Memory Pack (use naturally; do not restate verbatim):\n${workingPack}`);
-    if (hasHistory && recentConvosBlock) {
-      insParts.push(`Recent conversation excerpts (most recent first):\n${recentConvosBlock}`);
-      insParts.push(
-        `Guidance: These are the last conversations that you and ${userDisplayName || 'the user'} had in the previous session. Smoothly continue from there with variety and light humor. Do not restate the entire memory.`
-      );
-    } else {
-      // NEW USER FIRST-TURN SCRIPT: language choice + onboarding notice
-      insParts.push(
-        `First contact (no prior session):
-- Greet warmly in English and introduce yourself briefly (1 sentence).
-- Ask a clear question about language: “Would you like to continue in English, or switch to another language?” Give 3–5 examples in the same line (e.g., Macedonian, Albanian, Serbian, Greek, German).
-- Wait for the user's answer. If they choose a language, call set_preferred_language and then continue in that language for the rest of onboarding.
-- Tell them explicitly: “I’ll ask a few short questions to tailor your learning journey and help with real day‑to‑day tasks.”
-- Then ask the first onboarding question (Primary outcome with AI) with 2–3 example answers (no full option lists). After they answer, persist it with add_user_memory(type:"goal").
-- Keep each turn short and engaging; avoid filler or long descriptions.`
-      );
-    }
-    // If available, include a strict continuation anchor from the user's last message
-    if (anchorText) {
-      const tag = anchorWhenLocal ? `[${anchorWhenLocal}]` : '';
-      insParts.push(`Continuation anchor (for follow‑up after first turn):\n- Last user message ${tag}: \"${anchorText}\"\n- Use this anchor to continue ONLY after the learner confirms they want to resume. Do NOT use it on the very first response.`);
-    } else {
-      insParts.push(`If no explicit last-user anchor is available:\n- If this is a first session or onboarding answers are still missing, IGNORE this and run onboarding as specified above.\n- Otherwise, do NOT assume prior topics. Ask ONE short clarifying question to locate where to continue (e.g., “Want to pick up from our last topic or start fresh?”).`);
-    }
-    // Add recency-aware and post-reload + refresh-count greeting guidance (placed after core guidance to override tone)
-    try {
-      const postReload = (() => { try { const v = String(req.query?.post_settings_reload || '').toLowerCase(); return v === '1' || v === 'true' || v === 'yes'; } catch (_) { return false; } })();
-      const postReloadWhy = (() => { try { return String(req.query?.post_settings_reload_why || '').toLowerCase(); } catch (_) { return ''; } })();
-      const refreshCount = (() => { try { return Number(req.query?.refresh_count || 0) || 0; } catch(_) { return 0; } })();
-      const sinceLastMs = (() => { try { const v = Number(req.query?.since_last_ms || ''); return isNaN(v) ? null : v; } catch(_) { return null; } })();
-      let recencyMinutes = null;
-      if (lastConversationUpdatedAt) {
-        const diffMs = Date.now() - lastConversationUpdatedAt.getTime();
-        recencyMinutes = Math.floor(diffMs / 60000);
-      }
-      const lines = [];
-      lines.push('First-turn dynamics (recency & reload):');
-      if (postReload) {
-        const why = (postReloadWhy === 'voice' || postReloadWhy === 'style' || postReloadWhy === 'both') ? postReloadWhy : 'voice';
-        const what = (why === 'both') ? 'voice and style' : why;
-        lines.push(`- The user just reloaded after changing ${what}. Start with a brief, natural check that the new ${what} feels right (one short line), then continue without re‑introducing yourself.`);
-        lines.push('- Avoid generic greetings like “Hi there” or “Hello again.” If recent, acknowledge the quick return.');
-      }
-      // Refresh count heuristics from the client (last 2 minutes)
-      if (refreshCount && refreshCount >= 3) {
-        lines.push('- The page has been refreshed multiple times in a short window; optionally add a playful one-liner about refreshing, then continue. Keep it kind and brief.');
-      } else if (sinceLastMs != null && sinceLastMs <= 90_000) {
-        lines.push('- Return is very recent (≤90s); acknowledge timing in one short line and pick up the thread immediately.');
-      }
-      if (recencyMinutes != null) {
-        lines.push(`- Last conversation updated ~${recencyMinutes} min ago. Adjust tone:`);
-        if (recencyMinutes <= 5) lines.push('  * <=5 min: note they’re back fast (1 short line), then continue.');
-        else if (recencyMinutes <= 120) lines.push('  * <=120 min: light “welcome back,” then pick up the thread immediately.');
-        else if (recencyMinutes <= 1440) lines.push('  * <=24h: warmly note the break; proceed without long recap.');
-        else lines.push('  * >24h: offer a one‑line recap or ask if they want a quick update.');
-      } else {
-        lines.push('- No timestamp available: use a concise, non‑repetitive opener and continue quickly.');
-      }
-      lines.push('- Vary openings across sessions; avoid repeating phrasing. Keep it fresh and human.');
-      // Greeting policy depends on whether we have prior context
-      if (hasHistory) {
-        lines.push('- Greeting policy: DO NOT re‑introduce yourself. Skip “Hi, I\'m …”. Continue naturally from the latest context with one short line or a single clarifying question.');
-      } else {
-        // Enforce a concrete first-turn behavior when there is no prior history
-        lines.push('- FIRST SENTENCE MUST be a brief, natural greeting (use the learner’s display name if provided). Never start mid-task, with tool requests, or with device/mic checks.');
-        lines.push('- On the very first turn: If this is a first session or onboarding answers are missing, run the onboarding script (language choice → 5 short questions). Otherwise, do NOT reference prior content and ask ONE short question: “Continue where we left off or start something new?”.');
-      }
-      lines.push('- If the learner explicitly asks “what did we last talk about?”, answer with a 1–2 line summary drawn ONLY from the most recent excerpt, then ask a single follow‑up question.');
-      insParts.push(lines.join('\n'));
-    } catch (_) {}
-    const instructionsFull = insParts.join('\n\n');
-    // Send full instructions without truncation per request
-    let instructions = instructionsFull;
+    // Legacy insParts assembly removed; exported prompt already includes onboarding gate, language policy, identity, history, and anchors.
+    // Legacy dynamic greeting/debug assembly removed; exported prompt snapshot already encodes recency and onboarding cues
 
-    // Optional debug log of what we inject (full when debug is enabled)
-    try {
-      const envVal = String(process.env.DEBUG_CONTEXT_LOG || '').toLowerCase();
-      const dbgEnv = ['true','1','yes','on','full','all','raw'].includes(envVal);
-      const dbgQueryStr = String(req.query?.debug || '').toLowerCase();
-      const dbgQuery = ['true','1','yes','on','full','all','raw'].includes(dbgQueryStr);
-      // When any debug flag is present, always print FULL content
-      if (dbgEnv || dbgQuery) {
-        console.log('================ [realtime.token context] ================');
-        console.log('email:', req.user?.email || null);
-        console.log('contextSummary.len:', (contextSummary || '').length);
-        console.log('contextSummary.full:', contextSummary || '');
-        console.log('instructions.len.full:', (instructionsFull || '').length);
-        console.log('instructions.len.sent:', (instructions || '').length);
-        console.log('instructions.full (unsent, pre-trim):', instructionsFull || '');
-        console.log('==========================================================');
-      }
-    } catch (_) {}
-
-    // POST /realtime/sessions with short retry + timeout. Kept local to token route.
-    async function postSessionWithRetry(payload, attempts = 2) {
-      let lastErr = null;
-      const timeoutMs = Math.max(3000, Number(process.env.REALTIME_TOKEN_TIMEOUT_MS || 10000));
-      for (let i = 1; i <= attempts; i++) {
-        const controller = new AbortController();
-        const t = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          const resp = await fetchImpl('https://api.openai.com/v1/realtime/sessions', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-              'OpenAI-Beta': 'realtime=v1'
-            },
-            body: JSON.stringify(payload),
-            signal: controller.signal
-          });
-          clearTimeout(t);
-          return resp;
-        } catch (e) {
-          clearTimeout(t);
-          lastErr = e;
-          if (i < attempts) { await new Promise(r => setTimeout(r, 600 * i)); continue; }
-          throw e;
-        }
-      }
-      throw lastErr || new Error('realtime session post failed');
-    }
-
-    const upstream = await postSessionWithRetry({
-      model,
-      modalities: ['audio', 'text'],
-      voice: preferredVoice,
-      // Provide soft context tying the realtime agent to the authenticated user
-      instructions
-    });
-    let data = null;
-    try { data = await upstream.json(); } catch (_) { data = null; }
-    if (!upstream.ok) return res.status(upstream.status || 502).json(data || { error: 'upstream_failed' });
-    const token = data?.client_secret?.value;
-    if (!token) return res.status(500).json({ error: 'No client token in response' });
-    res.json({ token, hasHistory, preferredVoice });
+    // Legacy second token-post block removed; handled earlier
   } catch (err) {
     console.error('Token endpoint error:', err);
     res.status(500).json({ error: 'Token endpoint error' });

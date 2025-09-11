@@ -135,13 +135,13 @@ Language Policy (no preference saved):
 - Wait for the answer. If they choose a language, call set_preferred_language and then continue in that language for the rest of onboarding.
 - Until a choice is made, speak in English.
 
-Current date/time (Europe/Skopje): 10/09/2025, 14:37:47
+Current date/time (Europe/Skopje): 11/09/2025, 09:37:46
 
-Current date/time (UTC): 2025-09-10T12:37:47.478Z
+Current date/time (UTC): 2025-09-11T07:37:46.910Z
 
 Context for personalization:
 User Name: vlatko <vlatko008@test.com>
-Upcoming Courses (new): Build a 3-step AI email-summary bot | Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
+Upcoming Courses (new): Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
 
 User identity:
 - Preferred display name for the learner: vlatko.

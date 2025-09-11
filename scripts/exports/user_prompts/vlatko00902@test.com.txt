@@ -135,21 +135,18 @@ Language Policy (no preference saved):
 - Wait for the answer. If they choose a language, call set_preferred_language and then continue in that language for the rest of onboarding.
 - Until a choice is made, speak in English.
 
-Current date/time (Europe/Skopje): 10/09/2025, 14:37:47
+Current date/time (Europe/Skopje): 11/09/2025, 09:37:46
 
-Current date/time (UTC): 2025-09-10T12:37:47.478Z
+Current date/time (UTC): 2025-09-11T07:37:46.910Z
 
 Context for personalization:
 User Name: vlatko <vlatko00902@test.com>
 Upcoming Courses (yours): Empathy in the era of AI | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
-Upcoming Courses (new): Build a 3-step AI email-summary bot | Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
+Upcoming Courses (new): Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
 Favorites Courses: AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers | Empathy in the era of AI
 
 User identity:
 - Preferred display name for the learner: vlatko.
-
-Recent session summaries (NEWEST FIRST; prefer newest on conflict):
-S1 [2025-09-10T06:51:08.574Z]: The user, identified by User ID 18afb635-d0d9-4810-a668-61b5b4225914, is focused on learning AI for automation, particularly for creating dashboards within their marketing team. They work in the tech field and possess an advanced level of AI knowledge. Their primary motivation for learning AI is to stay competitive. The user prefers an intensive learning pace, aiming to engage in around eight courses per month. They have expressed interest in courses related to AI-driven automation and empathy in AI. Specifically, they have favorited the “Empathy in the era of AI” course and the “AI-Driven Automation for Competitive Analysis” course, which starts on 29th September 2025. They are also interested in a KPI dashboard automation course, but the closest available course is the one focused on competitive analysis. The user has not yet confirmed attendance for any specific course but has shown interest in exploring relevant options further.
 
 Working Memory Pack (use naturally; do not restate verbatim):
 Facts:

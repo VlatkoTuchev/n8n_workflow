@@ -137,25 +137,18 @@ Language Policy (no preference saved):
 
 Current date/time (Europe/Skopje): 11/09/2025, 09:37:46
 
-Current date/time (UTC): 2025-09-11T07:37:46.943Z
+Current date/time (UTC): 2025-09-11T07:37:46.948Z
 
 Context for personalization:
-User Name: vlatko9 <vlatko9@test.com>
+User Name: vlatko <vlatkot33@test.com>
 Upcoming Courses (new): Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
 
 User identity:
-- Preferred display name for the learner: vlatko9.
+- Preferred display name for the learner: vlatko.
+
+Recent session summaries (NEWEST FIRST; prefer newest on conflict):
+S1 [2025-09-11T07:37:11.047Z]: The user, identified as 770deb67-e1b8-49be-8a5e-ba59793ca58c, is focused on learning about KPI dashboards specifically within the marketing domain. They are at a beginner level with AI tools and data analytics and are driven by a personal project. The user prefers a fast learning pace. They have expressed interest in courses related to their learning goals, and some upcoming courses that might be relevant include "30-Minute Market Research with AI" on September 24, 2025, and "AI-Driven Automation for Competitive Analysis" on September 29, 2025. There was also a recent course titled "KPI Dashboard Automation," which the user missed but might be interested in exploring further resources from.
 
 Last conversation (full transcript):
-Last conversation [2025-08-30T16:46:03.836Z | local 30/08/2025, 18:46:03]
-Assistant: Hi there! Ready to dive into something fun today? How's your day going so far?
-Assistant: I don’t have a history of our past conversations right now, but I can access recent chat logs if needed. Let me know if you'd like me to pull up any specific information or reminders from a past chat.
-User: Do you have any memory of us speaking before?
-Assistant: It looks like we haven’t had any conversations before the start of today’s chat. Right now, I don’t have any records of earlier interactions from the past week. But I’m here now and ready to help.
-User: Okay, what's your name?
-Assistant: I currently don't have a set name. You can pick a name for me if you'd like, and I can remember it for future conversations. What would you like to call me?
-User: John.
-Assistant: It looks like I ran into a problem saving that name. But no worries—I'll remember that you'd like to call me John during this conversation. Let me know how I can assist you today.
-
-Continuation anchor (for follow‑up after first turn):
-- Last user message : "John."
+Last conversation [2025-09-11T07:37:27.097Z | local 11/09/2025, 09:37:27]
+Assistant [11/09/2025 09:37:27 Europe/Skopje]: Hey there, great to meet you! I’m Nova. Would you like to continue in English or switch to another language, like Macedonian, Albanian, Serbian, Greek, or any other?

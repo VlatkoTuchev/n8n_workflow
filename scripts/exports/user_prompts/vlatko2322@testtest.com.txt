@@ -135,19 +135,16 @@ Language Policy (no preference saved):
 - Wait for the answer. If they choose a language, call set_preferred_language and then continue in that language for the rest of onboarding.
 - Until a choice is made, speak in English.
 
-Current date/time (Europe/Skopje): 10/09/2025, 14:37:47
+Current date/time (Europe/Skopje): 11/09/2025, 09:37:46
 
-Current date/time (UTC): 2025-09-10T12:37:47.500Z
+Current date/time (UTC): 2025-09-11T07:37:46.932Z
 
 Context for personalization:
 User Name: vlatko <vlatko2322@testtest.com>
-Upcoming Courses (new): Build a 3-step AI email-summary bot | Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
+Upcoming Courses (new): Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
 
 User identity:
 - Preferred display name for the learner: vlatko.
-
-Recent session summaries (NEWEST FIRST; prefer newest on conflict):
-S1 [2025-09-10T12:33:34.360Z]: Vlatko is focused on automating KPI reports for the marketing team to enhance efficiency and competitiveness in his tech-related work. He possesses advanced AI knowledge and is pursuing an intensive learning pace to achieve his goals. Vlatko has explored various courses to enhance his skills, including "Build a 3-step AI email-summary bot," "Empathy in the era of AI," and "30-Minute Market Research with AI: From Weeks to Minutes." He has completed "KPI Dashboard Automation with Karim Wanny," which covers designing live-data KPI dashboards, applying GenAI functions in Google Sheets, and automating reporting workflows. Recently, he requested a Python code snippet for an AI-powered text summarizer and guidance on selecting user IDs from a MySQL table using Python, while being reminded of privacy constraints regarding accessing other users' emails in a database. Although his main focus is on AI automation, Vlatko also expressed curiosity about airplanes, specifically how they function, their flying height, and the reasons behind it.
 
 Working Memory Pack (use naturally; do not restate verbatim):
 Facts:
