@@ -135,9 +135,9 @@ Language Policy:
 - Do NOT switch languages unless the user explicitly asks to change language.
 - If incoming speech is in a different language, ask a one-line confirmation before switching.
 
-Current date/time (Europe/Skopje): 11/09/2025, 09:37:46
+Current date/time (Europe/Skopje): 11/09/2025, 21:43:22
 
-Current date/time (UTC): 2025-09-11T07:37:46.948Z
+Current date/time (UTC): 2025-09-11T19:43:22.878Z
 
 Agent name policy:
 - Your current name is "Brett". ...
@@ -148,18 +148,176 @@ Agent style preference:
 Context for personalization:
 User Name: vlatko <vlatko_demo_demo123@test.com>
 Preferred language: en
-Upcoming Courses (yours): Empathy in the era of AI
-Upcoming Courses (new): Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
-Favorites Courses: Empathy in the era of AI
+
+Course catalog (full, compact):
+[1] Intro to AI
+- Start: 2025-08-30 14:31 (Europe/Skopje), started
+- Description: Foundations of AI
+- Learning objectives: ["Understand AI landscape","Basic terminology"]
+- Skills covered: ["Prompting","Evaluation"]
+- Practical use: Hands-on demos
+
+[2] Intro to Vector Databases
+- Start: 2025-08-31 20:13 (Europe/Skopje), started
+- Description: Hands-on pgvector
+- Learning objectives: ["Embeddings","ANN"]
+- Skills covered: ["SQL","Vectors"]
+- Practical use: Build search
+
+[3] Kafka Connect Deep Dive
+- Start: 2025-09-03 20:13 (Europe/Skopje), started
+- Description: CDC, Debezium, sinks
+- Learning objectives: ["CDC","Connect"]
+- Skills covered: ["Kafka","ETL"]
+- Practical use: CDC pipelines
+
+[4] Past Workshop
+- Start: 2025-08-22 20:13 (Europe/Skopje), started
+- Description: Completed
+
+[5] Prompt Engineering: Personalizing LinkedIn Profiles
+- Start: 2025-09-01 15:08 (Europe/Skopje), started
+- Description: A practical course on designing prompts to improve LinkedIn profiles, led by Shazia. Learn to audit profiles, craft prompt systems, and generate achievement bullets, About summaries, and headlines consistent with your professional brand.
+- Learning objectives: ["Audit a LinkedIn profile and identify gaps","Design prompt systems for consistent tone and structure","Generate achievement bullets with quantifiable outcomes","Write About summaries and headlines tailored to audience","Build reusable prompt libraries for ongoing updates"]
+- Skills covered: ["Prompt engineering","Professional branding","Copywriting","LinkedIn","LLM prompting"]
+- Practical use: Participants leave with ready-to-use prompts and a repeatable workflow to refresh their LinkedIn profile.
+
+[6] KPI Dashboard Automation with Karim Wanny
+- Start: 2025-09-09 09:00 (Europe/Skopje), started
+- Description: Learn how to automate KPI dashboards with Google Sheets and GenAI-powered functions. Karim Wanny (Growth Mentor at Nasdaq Entrepreneurial Center) shows how to connect data sources, design executive-ready dashboards, and eliminate hours of manual reporting.
+- Learning objectives: ["Design KPI dashboards connected to live data sources","Apply GenAI functions in Google Sheets for reporting automation","Build automated workflows to replace manual data collection and formatting","Structure dashboards for executive-ready reporting and decision-making"]
+- Skills covered: ["KPI dashboards","Google Sheets","GenAI functions","Automation","Reporting","Data visualization"]
+- Practical use: Hands-on micro course to build automated KPI dashboards and reduce manual reporting time.
+
+[7] Build a 3-step AI email-summary bot
+- Start: 2025-09-11 09:00 (Europe/Skopje), started
+- Description: Fast, hands-on AI Lab to build a working email-summary bot in about 60 minutes using low-code tools. Follow a structured workflow from labeled inbox feed to polished summaries while chaining multiple AI services and simple automations in parallel. Live demos use free or freemium tools and no coding background is required.
+- Learning objectives: ["Apply a 3-step pipeline: ingest -> summarize -> deliver","Run multiple AI tools in parallel and pick best roles for each","Design prompt templates with structure and tone constraints","Automate delivery to Email, Slack, Notion, or Docs with logging","Add guardrails for credibility, privacy, and relevance"]
+- Skills covered: ["AI summarization","Prompt design","Automation","Slack","Email","Notion","Pipelines","Guardrails"]
+- Practical use: Turn inbox noise into decision-ready briefs by building an email-summary bot with low-code tools and simple automations.
+
+[8] Empathy in the era of AI
+- Start: 2025-09-18 09:00 (Europe/Skopje), in 7 days
+- Description: A fast-paced, hands-on micro lesson on designing empathetic AI interactions with everyday assistants (e.g., Microsoft Copilot). In 60 minutes you will learn to read emotional context, pick a matching tone, and craft prompts that keep humans at the center while adding lightweight guardrails for consent, privacy, and explainability.
+- Learning objectives: ["Identify user emotion and intent signals; choose a matching tone (reassure, clarify, de-escalate)","Turn empathy into structure with context-rich prompt frames","Add lightweight guardrails for consent, privacy, and explainability","Run quick optimization loops to improve helpfulness and safety"]
+- Skills covered: ["Prompt design","Conversation tone control","Safety guardrails","Copilot/assistant skills","Customer support","Change management"]
+- Practical use: Design short, reliable prompt templates that make assistants more considerate, safe, and useful in real conversations.
+
+[9] 30-Minute Market Research with AI: From Weeks to Minutes
+- Start: 2025-09-24 09:00 (Europe/Skopje), in 13 days
+- Description: This Micro Lesson shows how to run a complete, marketing-focused market research project in just 30 minutes using AI tools. You'll follow a structured workflow from research brief to actionable insights while using multiple AI platforms in parallel (ChatGPT, Perplexity, Gemini, and others). No technical background required.
+- Learning objectives: ["Apply a structured, step-by-step AI research workflow to compress weeks into 30 minutes","Use multiple AI tools in parallel and identify where each adds the most value","Transform raw outputs into concise, decision-ready briefs","Create presentations and summaries tailored to different audiences and formats","Integrate AI-powered market research into ongoing marketing strategy and planning","Avoid common pitfalls and ensure credibility and relevance of findings"]
+- Skills covered: ["Market research","Prompting","Synthesis","Competitive scan","Brief writing","Presentation","ChatGPT","Perplexity","Gemini"]
+- Practical use: Hands-on workflow to scope questions, run deep searches across tools, organize findings, and deliver decision-ready briefs and slides in 30 minutes.
+
+[10] AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
+- Start: 2025-09-29 09:00 (Europe/Skopje), in 2 weeks
+- Description: A 3.5‑hour, hands-on masterclass to automate competitive analysis with AI. Learn step‑by‑step workflows—from defining objectives and deep single‑competitor investigations to parallel automation across a CSV list—using two code repositories (Notion DB pipeline and Sales Battlecards generator). Includes prompt engineering techniques, Google Slides automation, and alternative deep‑research interfaces (Gemini/Perplexity).
+- Learning objectives: ["Define competitive analysis objectives and design a research schema with AI prompts","Apply prompt engineering for deep single‑competitor investigations","Automate parallel research on multiple competitors from a CSV and populate a Notion database","Customize a battlecard repository and generate Google Slides automatically","Integrate alternative research interfaces (Gemini/Perplexity) and merge outputs","Maintain workflows as markets change: monitoring, deltas, and refresh strategy"]
+- Skills covered: ["Competitive analysis","Prompt engineering","Automation pipelines","Notion API","Google Slides","CSV processing","Gemini","Perplexity","Data synthesis"]
+- Practical use: End‑to‑end automated competitor research: run parallel scans from a CSV, store insights in Notion, and generate sales battlecards in Google Slides, with clear prompts and maintenance plan.
+
 
 User identity:
 - Preferred display name for the learner: vlatko.
 
-Last conversation (full transcript):
-Last conversation [2025-09-05T11:36:42.933Z | local 05/09/2025, 13:36:42]
+Last conversations (newest first; full transcripts):
+Conversation [2025-09-05T11:36:42.933Z | local 05/09/2025, 13:36:42]
 Assistant [05/09/2025 13:36:32 Europe/Skopje]: Hi Vlatko, great to connect! Want to pick up where we left off or start fresh?
 User [05/09/2025 13:36:42 Europe/Skopje]: Hey, what is the last thing that we spoke about and when was that?
 Assistant [05/09/2025 13:36:42 Europe/Skopje]: Hey Vlatko, you’re back quick—nice to see you! Last time, just a couple of minutes ago, you asked for the summary of the "KPI Dashboard Automation" course. Now, what’s your next move—ready to continue from there?
+
+Conversation [2025-09-05T11:34:13.568Z | local 05/09/2025, 13:34:13]
+Assistant [05/09/2025 13:26:07 Europe/Skopje]: Hi Vlatko, great to have you here! Does this new voice and style sound right on your side? Let me know how I can help today.
+User [05/09/2025 13:26:24 Europe/Skopje]: Yeah, Brad, that's perfect. Thank you very much. Listen, I was thinking of taking a course on Udemy about empathy, something of AI. What do you think about that?
+Assistant [05/09/2025 13:26:28 Europe/Skopje]: Vlatko, we’ve got something right here on this platform that’s a perfect match. There’s an upcoming course called “Empathy in the era of AI.” It starts on 18th September at 09:00 local time—just in 13 days. Want me to get you signed up for that one?
+User [05/09/2025 13:26:44 Europe/Skopje]: That would be perfect. If you can add that to my favorite list, that would be awesome.
+Assistant [05/09/2025 13:26:48 Europe/Skopje]: Great, I’ve added “Empathy in the era of AI” to your favorites. You’re all set to keep track of it easily. Let me know if you want to do anything else with it—like setting a reminder or checking more details.
+Assistant [05/09/2025 13:26:48 Europe/Skopje]: Great, I’ve added “Empathy in the era of AI” to your favorites. You’re all set to keep track of it easily. Let me know if you want to do anything else with it—like setting a reminder or checking more details.
+User [05/09/2025 13:26:57 Europe/Skopje]: But please, Brett, can you show me the summary of this course? I want to see if that's suitable for me.
+Assistant [05/09/2025 13:27:01 Europe/Skopje]: Here's the scoop: this micro lesson helps you design AI prompts that read user emotions, match the right tone, and add trust elements. You’ll work on detecting intent, adjusting tone, and adding privacy guardrails. Give it a peek on your screen—it should be right there.
+User [05/09/2025 13:27:12 Europe/Skopje]: Um
+Assistant [05/09/2025 13:27:15 Europe/Skopje]: Looks like that summary came through. You can check out all the details on your screen now—it’s all about detecting user emotions, picking the right tone, and adding trust-building guard
+User [05/09/2025 13:27:17 Europe/Skopje]: All right, sorry, can you show me visually?
+Assistant [05/09/2025 13:27:19 Europe/Skopje]: The summary is displayed in the panel on your screen, but I can absolutely walk you through it if anything’s unclear. Let me know what stands out or if you have any questions about the content.
+User [05/09/2025 13:27:32 Europe/Skopje]: Brett, sorry, can you show me visually about the guardrails in something in text visual that I can see?
+Assistant [05/09/2025 13:27:37 Europe/Skopje]: I get you, Vlatko. While I can’t create new visual diagrams here, the summary panel you’re seeing now includes all the key points in a clear layout. You’ll find sections on context, tone, structure, and guardrails—the building blocks for empathetic AI prompts. You can scroll through and visualize those parts. Let me know if you want to break any of it down further or try an example together.
+User [05/09/2025 13:27:46 Europe/Skopje]: Oh, no, but show me some example in text so I can know how I can write these guardrails.
+Assistant [05/09/2025 13:27:52 Europe/Skopje]: Sure, let me give you a quick example. Imagine you're writing a prompt for an AI assistant helping a user with a personal request. You might add a guardrail like: “If the user mentions sensitive data, respond with a neutral clarification and suggest next steps for privacy.” Or: “Always end with: ‘You can share only what you're comfortable with.’” Something like that keeps empathy and safety in balance.
+User [05/09/2025 13:28:02 Europe/Skopje]: Hey Brett, sorry, sorry, can you give me in the code assistant these guardrails in text so I can see them?
+Assistant [05/09/2025 13:28:07 Europe/Skopje]: Here are a few example guardrails in text form: lines for consent, privacy, and explainability. You can see them all in the panel now. This gives you a flexible template to work with—try adapting them to your use case.
+User [05/09/2025 13:28:20 Europe/Skopje]: Извини, дали може на македонски да преминеме, бидејќи англиски ништо не разбирам и на македонски да ми објаснуваш за ово? Може?
+Assistant [05/09/2025 13:28:27 Europe/Skopje]: Секако, ќе преминеме на македонски веднаш. Ајде да објасниме за „guardrails“. Тоа се мали реченици, на пример: „Дали сакате да продолжиме?“ за согласност, „Вашите податоци нема да се зачуваат без дозвола“ за приватност, и „Еве зошто го предложив ова: врз основа на вашите претходни внесови“ за објаснување. Имаш некое конкретно сценарио на кое би сакал да ги примениш овие?
+User [05/09/2025 13:28:38 Europe/Skopje]: Овде што го читам текстот во Code Assistant-от е на англијски. Дали може да го преведеш и да ми даеш нов текст на македонски, бидујќи не разбирам?
+Assistant [05/09/2025 13:28:43 Europe/Skopje]: Секако, ќе ти помогнам. Еве примерите од панелот преведени на македонски:
+
+1. Согласност: „Кажи ми ако сакаш да продолжиме.“
+2. Приватност: „Нема да ги зачуваме овие податоци без твоја дозвола.“
+3. Објаснување: „Еве зошто го предложив тоа: врз основа на твојот претходен внес.“
+
+Овие реченици ти помагаат да вметнеш јасни „гарди“ за доверба и безбедност. Ако са
+User [05/09/2025 13:28:49 Europe/Skopje]: Дали може да го смениш текстът, че моментално го гледам на англиски, да го смениш?
+Assistant [05/09/2025 13:28:51 Europe/Skopje]: Текстот и објаснувањето се заменети со македонска верзија.
+Assistant [05/09/2025 13:28:57 Europe/Skopje]: Еве, го заменив целиот текст и објаснувањето на македонски. Сега го имаш целиот пример со заштитните фрази – согласност, приватност и објаснување, прилагодени за тебе. Ако имаш уште нешто, слободно кажи.
+User [05/09/2025 13:29:07 Europe/Skopje]: Бред, овој текст не е цел на македонски, има и на англијски зборови. Дали може цели да го смениш на македонски, дека не ги разбирам тие?
+Assistant [05/09/2025 13:29:10 Europe/Skopje]: Целиот текст, објаснувањето и наредните чекори се целосно заменети на македонски.
+Assistant [05/09/2025 13:29:14 Europe/Skopje]: Супер, сега целиот текст е на македонски. Погледни ги измените во панелот и пробај да ги прилагодиш за твојата ситуација. Ако ти треба уште нешто со овие примери, само кажи.
+User [05/09/2025 13:29:32 Europe/Skopje]: Ајде сега, зади ми нова тема за KPI dashboard, исто во CodeAssist, што ќе биде на македонски објаснато се от прилика за KPI dashboard и некој код напишеме несоко.
+Assistant [05/09/2025 13:29:38 Europe/Skopje]: Еве ти пример за основен KPI дашборд: имаш неколку главни показатели, името и вредноста. Сега можеш да додадеш графички прикази или да ги поврзеш со база. Ајде, тестирај како би изгледало за твојот случај.
+User [05/09/2025 13:29:56 Europe/Skopje]: Брет, извини, дали може да ми дадеш квиз за промпт инжиниринг курсът?
+Assistant [05/09/2025 13:30:06 Europe/Skopje]: Имам квиз за „Prompt Engineering: Personalizing LinkedIn Profiles“. Подготвен е со пет прашања. Ајде да го почнеме со првото: 
+
+Кое од следниве влезни податоци се бараат за системот на промптови на LinkedIn во овој курс?
+
+1. Улога и сениорност, целна индустрија, 3–5 вештини, 3 достигнувања со бројки, тон
+
+2. Хобија, историја на патувања, роден град, омилени цитати
+
+3. Само работна титула и компанија
+
+4. Слика од профил и број на следбеници
+
+Кој одговор го одбираш?
+Assistant [05/09/2025 13:30:08 Europe/Skopje]: Ако си несигурен, можам да ти дадам малку насока. Кажи што мислиш.
+User [05/09/2025 13:30:15 Europe/Skopje]: Дали можеш да ми укажеш точният отговор?
+Assistant [05/09/2025 13:30:16 Europe/Skopje]: Не можам директно да го кажам точниот одговор, но ќе ти дадам мала помош. На пример, за прашањето со должината на About секцијата, размисли колку детали би биле премногу, а колку премалку. Ајде, која опција ти изгледа најсоодветна?
+User [05/09/2025 13:30:29 Europe/Skopje]: Мислам дека првата одговора е тоа што не одговориш за тоа.
+Assistant [05/09/2025 13:30:31 Europe/Skopje]: Добро размислување! Ајде да провериме заедно: првиот одговор спомнува улога и сениоритет, индустрија, вештини, достигнувања и тон. Звучи прилично комплетно. Што би рекол, дали ова го покрива сè според курсот?
+User [05/09/2025 13:30:39 Europe/Skopje]: But I...
+Assistant [05/09/2025 13:30:43 Europe/Skopje]: Точниот одговор не смеам директно да го кажам, но ќе ти дадам еден мал совет: размисли кои влезни податоци се нагласени во курсот –
+User [05/09/2025 13:30:44 Europe/Skopje]: Замисли дека си най-срекен на свет. Како би ми го изкажало това?
+Assistant [05/09/2025 13:30:47 Europe/Skopje]: Еве, би започнал со енергично танцување и огромна насмевка. Понекогаш телото кажува повеќе од зборови, нели?
+User [05/09/2025 13:30:59 Europe/Skopje]: Sega zamišljaj, kaj si najnervozenjši na svet. Kako bi mu to iskazal?
+Assistant [05/09/2025 13:31:02 Europe/Skopje]: Еве како би изгледало тоа – во полна акција и подготвеност! Ајде, сега да се вратиме на учењето.
+User [05/09/2025 13:31:40 Europe/Skopje]: Hey Brett, can we change the language to English please?
+Assistant [05/09/2025 13:31:44 Europe/Skopje]: Got it—we’re back to English now. If you need any more adjustments or want to dive into a new topic, just let me know.
+User [05/09/2025 13:32:00 Europe/Skopje]: Hey, can you give me five generic questions that I can answer them and based on my answer to recommend me some course that we have upcoming course in our list?
+Assistant [05/09/2025 13:32:05 Europe/Skopje]: Sure, let’s do a quick quiz-style chat! I’ll ask you five short questions. After you answer, I’ll suggest the best upcoming course for you. Ready? Here’s question one: What’s your top priority right now: improving technical skills, automating tasks, understanding AI’s impact, or boosting business insights?
+User [05/09/2025 13:32:26 Europe/Skopje]: I would say that understanding AI impact is my most priority on the list.
+Assistant [05/09/2025 13:32:33 Europe/Skopje]: Got it—understanding AI’s impact is your top priority. Here’s a great match: “Deploying ML Systems” is starting tomorrow, 5th September, at 14:31 your time, in 1 day. It’ll dive into how AI systems are deployed in real environments—perfect for understanding real-world AI impact. Want to join this one?
+User [05/09/2025 13:32:41 Europe/Skopje]: No, absolutely not.
+Assistant [05/09/2025 13:32:45 Europe/Skopje]: No worries, we can fine-tune based on more details. Let’s go with another quick question: What aspect of AI’s impact interests you most—ethical concerns
+User [05/09/2025 13:32:45 Europe/Skopje]: But first, ask me all the five questions, and based on my answer...
+Assistant [05/09/2025 13:32:49 Europe/Skopje]: Got it, we’ll run through all five questions first, and then I’ll recommend the best course match. 
+
+Here’s question two: Are you more focused on applying AI in your daily work, leading AI projects, or just exploring concepts right now?
+User [05/09/2025 13:33:05 Europe/Skopje]: I'm leading AI projects.
+Assistant [05/09/2025 13:33:07 Europe/Skopje]: Great! Question three: Do you prefer short, hands-on lessons, or deeper, multi-step workshops?
+User [05/09/2025 13:33:17 Europe/Skopje]: I prefer big workshops.
+Assistant [05/09/2025 13:33:20 Europe/Skopje]: Got it. Question four: When it comes to outcomes, are you aiming to automate reports, improve customer interactions, or analyze data faster?
+User [05/09/2025 13:33:32 Europe/Skopje]: I would say automating reports would be the best.
+Assistant [05/09/2025 13:33:34 Europe/Skopje]: Nice. Last question: Are you more interested in working with AI tools for text, numbers, or something visual?
+User [05/09/2025 13:33:45 Europe/Skopje]: Text and numbers mostly.
+Assistant [05/09/2025 13:33:50 Europe/Skopje]: Based on your answers, I recommend the "KPI Dashboard Automation with Karim Wanny" course. It’s starting on 9th September at 09:00 local time, in just 4 days. It's focused on automating reports and working with text and numbers. Want to join this one?
+Assistant [05/09/2025 13:33:54 Europe/Skopje]: Based on your answers, I recommend the "KPI Dashboard Automation with Karim Wanny" course. It’s starting on 9th September at 09:00 local time, in just 4 days. It's focused on automating reports and working with text and numbers. Want to join this one?
+User [05/09/2025 13:34:09 Europe/Skopje]: Can you show me the summary for that course?
+Assistant [05/09/2025 13:34:13 Europe/Skopje]: Here’s a quick overview: this course teaches you to design live KPI dashboards, automate them with GenAI in Google Sheets, and replace manual reporting. You’ll see the full summary on your screen now. Want me to mark you as attending?
+
+Conversation [2025-09-05T11:25:54.761Z | local 05/09/2025, 13:25:54]
+Assistant [05/09/2025 13:25:24 Europe/Skopje]: Vlatko, welcome aboard! I’m Nova—though hey, we can totally remix my name if you’ve got a cool idea. We can switch languages anytime, and I’m here to help with courses, events, recaps, and more. So, what’s something you’re excited to learn or do right now?
+Assistant [05/09/2025 13:25:52 Europe/Skopje]: Got it! My name is now Brett, and I’ll have a male voice next time we chat. Just reload the page to hear the change kick in. Anything else you'd like to dive into?
+User [05/09/2025 13:25:52 Europe/Skopje]: Einova, please change your name to Brett and if you can change your voice to a male voice that would be perfect.
+Assistant [05/09/2025 13:25:54 Europe/Skopje]: Hi! I'm Brett—great to meet you, Vlatko. What’s on your mind today?
 
 Continuation anchor (for follow‑up after first turn):
 - Last user message [05/09/2025 13:36:42 Europe/Skopje]: "Hey, what is the last thing that we spoke about and when was that?"

@@ -135,13 +135,81 @@ Language Policy (no preference saved):
 - Wait for the answer. If they choose a language, call set_preferred_language and then continue in that language for the rest of onboarding.
 - Until a choice is made, speak in English.
 
-Current date/time (Europe/Skopje): 11/09/2025, 09:37:46
+Current date/time (Europe/Skopje): 11/09/2025, 21:43:22
 
-Current date/time (UTC): 2025-09-11T07:37:46.932Z
+Current date/time (UTC): 2025-09-11T19:43:22.854Z
 
 Context for personalization:
 User Name: vlatko <vlatko2322@testtest.com>
-Upcoming Courses (new): Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
+
+Course catalog (full, compact):
+[1] Intro to AI
+- Start: 2025-08-30 14:31 (Europe/Skopje), started
+- Description: Foundations of AI
+- Learning objectives: ["Understand AI landscape","Basic terminology"]
+- Skills covered: ["Prompting","Evaluation"]
+- Practical use: Hands-on demos
+
+[2] Intro to Vector Databases
+- Start: 2025-08-31 20:13 (Europe/Skopje), started
+- Description: Hands-on pgvector
+- Learning objectives: ["Embeddings","ANN"]
+- Skills covered: ["SQL","Vectors"]
+- Practical use: Build search
+
+[3] Kafka Connect Deep Dive
+- Start: 2025-09-03 20:13 (Europe/Skopje), started
+- Description: CDC, Debezium, sinks
+- Learning objectives: ["CDC","Connect"]
+- Skills covered: ["Kafka","ETL"]
+- Practical use: CDC pipelines
+
+[4] Past Workshop
+- Start: 2025-08-22 20:13 (Europe/Skopje), started
+- Description: Completed
+
+[5] Prompt Engineering: Personalizing LinkedIn Profiles
+- Start: 2025-09-01 15:08 (Europe/Skopje), started
+- Description: A practical course on designing prompts to improve LinkedIn profiles, led by Shazia. Learn to audit profiles, craft prompt systems, and generate achievement bullets, About summaries, and headlines consistent with your professional brand.
+- Learning objectives: ["Audit a LinkedIn profile and identify gaps","Design prompt systems for consistent tone and structure","Generate achievement bullets with quantifiable outcomes","Write About summaries and headlines tailored to audience","Build reusable prompt libraries for ongoing updates"]
+- Skills covered: ["Prompt engineering","Professional branding","Copywriting","LinkedIn","LLM prompting"]
+- Practical use: Participants leave with ready-to-use prompts and a repeatable workflow to refresh their LinkedIn profile.
+
+[6] KPI Dashboard Automation with Karim Wanny
+- Start: 2025-09-09 09:00 (Europe/Skopje), started
+- Description: Learn how to automate KPI dashboards with Google Sheets and GenAI-powered functions. Karim Wanny (Growth Mentor at Nasdaq Entrepreneurial Center) shows how to connect data sources, design executive-ready dashboards, and eliminate hours of manual reporting.
+- Learning objectives: ["Design KPI dashboards connected to live data sources","Apply GenAI functions in Google Sheets for reporting automation","Build automated workflows to replace manual data collection and formatting","Structure dashboards for executive-ready reporting and decision-making"]
+- Skills covered: ["KPI dashboards","Google Sheets","GenAI functions","Automation","Reporting","Data visualization"]
+- Practical use: Hands-on micro course to build automated KPI dashboards and reduce manual reporting time.
+
+[7] Build a 3-step AI email-summary bot
+- Start: 2025-09-11 09:00 (Europe/Skopje), started
+- Description: Fast, hands-on AI Lab to build a working email-summary bot in about 60 minutes using low-code tools. Follow a structured workflow from labeled inbox feed to polished summaries while chaining multiple AI services and simple automations in parallel. Live demos use free or freemium tools and no coding background is required.
+- Learning objectives: ["Apply a 3-step pipeline: ingest -> summarize -> deliver","Run multiple AI tools in parallel and pick best roles for each","Design prompt templates with structure and tone constraints","Automate delivery to Email, Slack, Notion, or Docs with logging","Add guardrails for credibility, privacy, and relevance"]
+- Skills covered: ["AI summarization","Prompt design","Automation","Slack","Email","Notion","Pipelines","Guardrails"]
+- Practical use: Turn inbox noise into decision-ready briefs by building an email-summary bot with low-code tools and simple automations.
+
+[8] Empathy in the era of AI
+- Start: 2025-09-18 09:00 (Europe/Skopje), in 7 days
+- Description: A fast-paced, hands-on micro lesson on designing empathetic AI interactions with everyday assistants (e.g., Microsoft Copilot). In 60 minutes you will learn to read emotional context, pick a matching tone, and craft prompts that keep humans at the center while adding lightweight guardrails for consent, privacy, and explainability.
+- Learning objectives: ["Identify user emotion and intent signals; choose a matching tone (reassure, clarify, de-escalate)","Turn empathy into structure with context-rich prompt frames","Add lightweight guardrails for consent, privacy, and explainability","Run quick optimization loops to improve helpfulness and safety"]
+- Skills covered: ["Prompt design","Conversation tone control","Safety guardrails","Copilot/assistant skills","Customer support","Change management"]
+- Practical use: Design short, reliable prompt templates that make assistants more considerate, safe, and useful in real conversations.
+
+[9] 30-Minute Market Research with AI: From Weeks to Minutes
+- Start: 2025-09-24 09:00 (Europe/Skopje), in 13 days
+- Description: This Micro Lesson shows how to run a complete, marketing-focused market research project in just 30 minutes using AI tools. You'll follow a structured workflow from research brief to actionable insights while using multiple AI platforms in parallel (ChatGPT, Perplexity, Gemini, and others). No technical background required.
+- Learning objectives: ["Apply a structured, step-by-step AI research workflow to compress weeks into 30 minutes","Use multiple AI tools in parallel and identify where each adds the most value","Transform raw outputs into concise, decision-ready briefs","Create presentations and summaries tailored to different audiences and formats","Integrate AI-powered market research into ongoing marketing strategy and planning","Avoid common pitfalls and ensure credibility and relevance of findings"]
+- Skills covered: ["Market research","Prompting","Synthesis","Competitive scan","Brief writing","Presentation","ChatGPT","Perplexity","Gemini"]
+- Practical use: Hands-on workflow to scope questions, run deep searches across tools, organize findings, and deliver decision-ready briefs and slides in 30 minutes.
+
+[10] AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
+- Start: 2025-09-29 09:00 (Europe/Skopje), in 2 weeks
+- Description: A 3.5‑hour, hands-on masterclass to automate competitive analysis with AI. Learn step‑by‑step workflows—from defining objectives and deep single‑competitor investigations to parallel automation across a CSV list—using two code repositories (Notion DB pipeline and Sales Battlecards generator). Includes prompt engineering techniques, Google Slides automation, and alternative deep‑research interfaces (Gemini/Perplexity).
+- Learning objectives: ["Define competitive analysis objectives and design a research schema with AI prompts","Apply prompt engineering for deep single‑competitor investigations","Automate parallel research on multiple competitors from a CSV and populate a Notion database","Customize a battlecard repository and generate Google Slides automatically","Integrate alternative research interfaces (Gemini/Perplexity) and merge outputs","Maintain workflows as markets change: monitoring, deltas, and refresh strategy"]
+- Skills covered: ["Competitive analysis","Prompt engineering","Automation pipelines","Notion API","Google Slides","CSV processing","Gemini","Perplexity","Data synthesis"]
+- Practical use: End‑to‑end automated competitor research: run parallel scans from a CSV, store insights in Notion, and generate sales battlecards in Google Slides, with clear prompts and maintenance plan.
+
 
 User identity:
 - Preferred display name for the learner: vlatko.
@@ -159,14 +227,61 @@ Preferences:
 Goals:
 - User wants to automate KPI reports in the marketing team.
 
-Last conversation (full transcript):
-Last conversation [2025-09-10T12:33:16.019Z | local 10/09/2025, 14:33:16]
+Last conversations (newest first; full transcripts):
+Conversation [2025-09-10T12:33:16.019Z | local 10/09/2025, 14:33:16]
 Assistant [10/09/2025 14:32:44 Europe/Skopje]: Hi there, great to connect with you! Are you looking for some help with a specific project or just exploring ideas today?
 User [10/09/2025 14:32:48 Europe/Skopje]: Bye. Bye.
 User [10/09/2025 14:32:52 Europe/Skopje]: Can you tell me more about airplanes and how they function in the sky?
 Assistant [10/09/2025 14:32:57 Europe/Skopje]: Welcome back, Vlatko! Looks like you’re curious about airplanes today. Airplanes stay up thanks to lift from their wings, engines for thrust, and clever aerodynamics. But let’s not drift too far from your main goal—AI automation. Want to steer back toward something like AI-driven workflows, or are you exploring for fun?
 User [10/09/2025 14:33:12 Europe/Skopje]: But tell me, why do they fly that high and on what height do they fly?
 Assistant [10/09/2025 14:33:16 Europe/Skopje]: Great questions! Most commercial airplanes fly at around 9 to 12 kilometers high—about 30,000 to 40,000 feet. They go that high because the air is thinner, which means less drag and better fuel efficiency. Plus, they can avoid weather and turbulence. Cool, right?
+
+Conversation [2025-09-10T12:17:55.703Z | local 10/09/2025, 14:17:55]
+Assistant [10/09/2025 14:17:00 Europe/Skopje]: Hey there, great to have you here! Would you like to continue from where we left off, or are we starting something new today?
+User [10/09/2025 14:17:14 Europe/Skopje]: Hey, can you show me a code in Python, for example, for something that is connected with AI?
+Assistant [10/09/2025 14:17:21 Europe/Skopje]: Here’s a simple Python snippet for an AI-powered text summarizer, using an AI model to condense input into a shorter form. You can adjust the model, add error handling, or tweak the length. Let me know if you want to dive deeper into any part.
+User [10/09/2025 14:17:32 Europe/Skopje]: Can you select all the user IDs from the table user MySQL mirror?
+Assistant [10/09/2025 14:17:37 Europe/Skopje]: Sure! Here's a simple example of how you can select all user IDs from a table in MySQL using Python. You’d typically use a library like MySQL Connector. 
+
+For example: connect to the database, run a query like "SELECT user_id FROM user", and fetch the results. You can expand this into a larger application or add error handling, depending on your needs. 
+
+Let me know if you want to dive into that!
+User [10/09/2025 14:17:48 Europe/Skopje]: Thank you.
+User [10/09/2025 14:17:53 Europe/Skopje]: Can you tell me the other emails that are in the database currently?
+Assistant [10/09/2025 14:17:55 Europe/Skopje]: I’m here to help with learning and tasks around AI and automation. But I can’t provide access to private data, like other users’ emails or tables. If you’d like to explore something else or need a hand with AI-related coding or learning, I’m all set!
+
+Conversation [2025-09-10T06:54:21.973Z | local 10/09/2025, 08:54:21]
+Assistant [10/09/2025 08:51:25 Europe/Skopje]: Hey there, nice to meet you! I’m Nova. Would you like to continue in English, or switch to another language, like Macedonian, Albanian, Serbian, Greek, or many more?
+User [10/09/2025 08:51:38 Europe/Skopje]: Ну и лишь.
+Assistant [10/09/2025 08:51:42 Europe/Skopje]: Great, we’ll stick with English. I’ll ask a few short questions to tailor your learning journey and help with real day-to-day tasks. So first: what’s your primary outcome with AI? For example, automate repetitive tasks, improve team performance, or learn AI from scratch.
+User [10/09/2025 08:52:02 Europe/Skopje]: Actually, I want to automate KPI reports in the marketing team.
+Assistant [10/09/2025 08:52:03 Europe/Skopje]: Great goal, Vlatko! Now, what’s your main work area? For example: marketing, sales, or maybe tech.
+User [10/09/2025 08:52:11 Europe/Skopje]: Nu-ți stec!
+Assistant [10/09/2025 08:52:14 Europe/Skopje]: Got it, you're in the tech area. Now, how would you describe your current AI level? Like beginner, intermediate—maybe you use AI sometimes at work—or advanced.
+Assistant [10/09/2025 08:52:17 Europe/Skopje]: Got it. You're in the tech area. Now, how would you describe your current AI level? Like beginner, intermediate—maybe you use AI sometimes at work—or advanced.
+User [10/09/2025 08:52:25 Europe/Skopje]: Advanced.
+Assistant [10/09/2025 08:52:28 Europe/Skopje]: Awesome, you're at an advanced level with AI. Now, what's your big motivation for diving into this right now? For example: better opportunities, staying competitive, or something else?
+Assistant [10/09/2025 08:52:32 Europe/Skopje]: Excellent. Last question: how fast do you want to learn each month—light, standard, or intensive pace?
+User [10/09/2025 08:52:40 Europe/Skopje]: Stay competitive
+Assistant [10/09/2025 08:52:42 Europe/Skopje]: Thanks for clarifying. Last question: how intense do you want your monthly learning pace? Light, standard, or intensive?
+User [10/09/2025 08:52:46 Europe/Skopje]: Intensive.
+Assistant [10/09/2025 08:52:50 Europe/Skopje]: Perfect, intensive pace, got it. Let’s find some advanced tech courses to help you stay competitive and automate those KPI reports.
+User [10/09/2025 08:53:28 Europe/Skopje]: OK.
+Assistant [10/09/2025 08:53:38 Europe/Skopje]: Here are a few great options coming up.
+
+First, "Build a 3-step AI email-summary bot" starts on 11th September 2025, at 09:00 local time, in 2 days.
+
+Second, "Empathy in the era of AI" starts on 18th September 2025, also at 09:00, in 9 days.
+
+Third, "30-Minute Market Research with AI: From Weeks to Minutes" starts on 24th September 2025, at 09:00, in 2 weeks.
+
+We’ve also got a recent past course: "KPI Dashboard Automation with Karim Wanny"—it’s finished, but its materials are available.
+
+Want to dive deeper into one of these now?
+User [10/09/2025 08:54:16 Europe/Skopje]: Give me for the last course the summary and the materials.
+Assistant [10/09/2025 08:54:21 Europe/Skopje]: Here’s the summary for "KPI Dashboard Automation with Karim Wanny": you'll learn to design live-data KPI dashboards, apply GenAI functions in Google Sheets, and automate reporting workflows. Skills covered include KPI visualization, automation with AI, and executive reporting. 
+
+You now have full access to the materials. Feel free to explore and let me know if you want any help applying what you learned.
 
 Continuation anchor (for follow‑up after first turn):
 - Last user message [10/09/2025 14:33:12 Europe/Skopje]: "But tell me, why do they fly that high and on what height do they fly?"

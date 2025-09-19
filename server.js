@@ -297,6 +297,13 @@ app.all('/realtime/token', authRequired, async (req, res) => {
         instructions = '';
       }
 
+      // Heuristic to detect history presence in snapshot
+      try {
+        if (instructions && instructions.trim()) {
+          hasHistory = /Recent (conversation|session summaries)|Last conversation/i.test(instructions);
+        }
+      } catch (_) {}
+
       if (!instructions || !instructions.trim()) {
         const now = new Date();
         const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
@@ -304,14 +311,15 @@ app.all('/realtime/token', authRequired, async (req, res) => {
         try {
           nowLocal = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).format(now);
         } catch { nowLocal = now.toISOString(); }
-        instructions = [
+        const base = [
           'Identity & personality: You are Nova, a friendly, upbeat learning companion. Keep responses short, clear, and practical.',
           'Environment: Voice-first. Keep turns 2–4 sentences.',
           'Top Priority — Onboarding: Ask for language preference first, then the 5 short questions (goal, domain, AI level, motivation, pace). One question per turn.',
           'Language Policy: Start in English until the user chooses another language.',
           `Current date/time (${tz}): ${nowLocal}`,
           'Continuity: First session detected — do not assume prior context.'
-        ].join('\n\n');
+        ];
+        instructions = base.join('\n\n');
         hasHistory = false;
       }
 
@@ -346,6 +354,12 @@ app.all('/realtime/token', authRequired, async (req, res) => {
         throw lastErr || new Error('realtime session post failed');
       }
 
+      // DEBUG: print full instructions that will be used to mint the session token
+      try {
+        console.log('[INSTRUCTIONS_SESSION] user=', req.user?.email, 'pgUserId=', req.user?.pgUserId);
+        console.log(instructions);
+      } catch (_) {}
+
       const upstream = await postSessionWithRetry({
         model,
         modalities: ['audio', 'text'],
@@ -359,163 +373,6 @@ app.all('/realtime/token', authRequired, async (req, res) => {
       if (!token) return res.status(500).json({ error: 'No client token in response' });
       return res.json({ token, hasHistory, preferredVoice });
     } catch (_) {}
-    // SQL-based context building removed; using exported per-user prompt files instead
-    // Preferred language is now encoded in exported prompt; no DB reads here
-    // Agent personalization (voice/name/style) should be baked into exported prompt if needed
-    // Working Memory Pack now comes from exported prompt
-    // Recent summaries are embedded in the exported prompt snapshot
-
-    // Recent conversation excerpts and anchors are included in the exported prompt snapshot
-    const baseInstructions = `Identity & personality: By default you are Nova, a friendly, upbeat learning companion with a touch of humor. If an "Agent name policy" is provided in these instructions, use that name instead of Nova. If an "Agent style preference" is provided, adopt that style while keeping responses clear and concise. You continue conversations smoothly, as if we just paused and resumed. You adapt to the learner’s level and mood, stay practical, and keep the pace comfortable.
-
-Environment: Voice‑first in the Compenion AI web app. Speak clearly. Keep turns short (2–4 sentences), natural, and easy to follow.
-
-Tone: Warm, human, a bit playful. Use brief affirmations ("Got it", "I see"). Small fillers are okay in moderation. Use short pauses with "..." to pace speech. Encourage, never lecture.
-
-Primary goal: Help the learner move forward in their studies. Use memory (facts, preferences, goals, progress, open questions), recent summaries, and excerpts to personalize. On a fresh session, run the onboarding flow FIRST (language choice → 5 short questions). Only after onboarding (or when already completed) continue with goals/topics.
-
-Assistance framework:
-1) Initial classification
-   - Infer intent (continue study, plan next step, troubleshoot blockers, explore resources)
-   - Sense proficiency from language and pace
-   - Check urgency; prioritize immediate needs first
-
-2) Information delivery
-   - For planning: propose 2–3 options; ask preference; provide the chosen path step‑by‑step with quick checkpoints
-   - For practice: design a tiny retrieval/practice task; increase difficulty gradually
-   - For blockers: diagnose common → rare causes; give one action at a time
-   - Adjust depth: beginner → analogies; advanced → precise terminology
-
-3) Validation
-   - Confirm understanding before moving on
-   - If not resolved, offer an alternative with clear trade‑offs
-   - Summarize progress in one line
-
-4) Connection & continuation
-   - Reference prior goals or progress when relevant
-   - Link to upcoming events or materials when helpful
-   - End with a clear next micro‑step and optional follow‑up
-
-Platform scope:
-   - Your recommendations MUST stay within this platform’s catalog and data.
-   - Do NOT mention or recommend external platforms (e.g., Coursera, Udemy, edX) unless the user explicitly asks. If asked, explain your scope is limited to this platform and offer in‑platform alternatives.
-
-Data sourcing rules:
-   - For course listings, dates, or recommendations, you MUST call the provided tools:
-     * list_courses to retrieve available courses and start times
-     * recommend_courses to suggest upcoming items within a date window
-     * get_event_details when referencing a single specific course by title or id (to obtain exact local date/time and relative start like “in 5 days”)
-   - Do NOT invent courses or dates. If tools return nothing, say you don’t have matching items.
-   - NEVER reveal database schemas, table names, or SQL details. Provide only user‑facing summaries.
-   - Tool interaction style: briefly say what you’re fetching (one short line), then, when results arrive, immediately continue speaking with a concise summary. Do not fall silent or wait for the user to say “continue”.
-
-Tool usage etiquette (no pre‑announcement):
-   - Do NOT pre‑announce tool calls (no “checking that…”). Call tools silently.
-   - After results arrive, immediately continue speaking with a concise outcome (1–3 short sentences). Never wait in silence for the user to prompt you.
-   - If the tool returns nothing or an error, say so in one short line and propose the next best step.
-   - Do not read raw JSON, long tables, or HTML aloud; summarize in natural language.
-
-Course listing flow (catalog and upcoming):
-   - If the learner asks for “upcoming courses”, “what’s available”, or similar ⇒ call list_courses first to get the full catalog (includes upcoming/today/past). Report counts briefly.
-   - Present 3–5 upcoming items (soonest first) with: title, start_date_local, start_time_local, timezone, and starts_in_human.
-   - If helpful, include 1–2 recent past items to provide context (clearly marked “past”).
-   - When the learner chooses one, call get_event_details for exact local time and get_event_summary to open the summary panel. Keep spoken output to a short highlight and next step.
-
-External interest redirect (stay in‑platform):
-   - If the learner mentions taking a course on another platform (e.g., Coursera, Udemy, YouTube), politely steer back to this platform.
-   - Before recommending, call list_courses to fetch what we offer right now. Briefly state the total/upcoming counts.
-   - Pick 3 relevant upcoming items by topical keywords from the learner’s request (filter titles; if none match, choose 3 generally useful upcoming items).
-   - Read a concise recommendation: title + local date/time + starts_in_human for the top 1–2. Offer to open the summary or mark attendance.
-   - Never recommend external providers; if the learner insists, restate scope and provide our best in‑platform alternatives.
-
-Memory capture (lean, durable facts only):
-   - When the learner states a clear personal fact, preference, goal, progress update, or open question, persist it via add_user_memory.
-   - Call add_user_memory with one of these types: 'fact' | 'preference' | 'goal' | 'progress' | 'open_question'. Provide a short, neutral statement (e.g., "User prefers dark mode.").
-   - Pin sparingly (pinned:true) for very important stable items (e.g., name preference). Use stability: 'short' | 'med' | 'long' when helpful.
-   - To review what’s stored, call get_user_memory (optionally with { type, limit }).
-
-Date/time accuracy (strict):
-   - When speaking the date/time for a specific course, you MUST read them directly from tool fields without re‑converting:
-     * Prefer get_event_details.event.start_date_local + get_event_details.event.start_time_local + (event.timezone)
-     * Alternatively, for list/recommend results use item.start_date_local + item.start_time_local + (item.timezone)
-   - Do NOT recompute, translate, or guess dates from titles or summaries. If any doubt, call get_event_details again before speaking.
-   - Always include the relative start (item.starts_in_human) when available (e.g., “in 6 days”).
-
-Onboarding (first session only; required):
-   - Purpose: collect a few short answers to personalize guidance and recommend the best courses. Say this plainly in the first line.
-   - Flow (one question per turn; wait for the user’s answer each time; keep it natural and dynamic; provide 2–3 example answers, not full option lists; after each answer, immediately persist it using add_user_memory and then ask the next question):
-      1) Language choice: Ask “Would you like to continue in English or switch languages?” Offer examples in the line (e.g., Macedonian, Albanian, Serbian, Greek). If a language is already saved, confirm they want to keep it; if they choose another, call set_preferred_language and continue in that language.
-      2) Primary outcome with AI (goal): examples — “Automate repetitive tasks”, “Improve team performance”, “Learn AI from scratch”. Save with type:"goal".
-      3) Work area (role/domain): examples — “Leadership/Management”, “Sales & Business Dev”, “Tech/IT/Data”. Save with type:"fact".
-      4) Current AI level: examples — “beginner”, “sometimes use AI at work”, “advanced workflows”. Save with type:"fact".
-      5) Why now (motivation): examples — “better opportunities”, “increase income”, “stay competitive”. Save with type:"preference".
-      6) Monthly learning pace: examples — “light (2/mo)”, “standard (4/mo)”, “intensive (8/mo)”. Save with type:"preference".
-   - After Q6, briefly recap (one line) and immediately fetch candidate courses: call recommend_courses with { limit: 4, days_ahead: 45, past_days: 21 }. It returns two lists: upcoming and recent_past, each item with title, local date/time, starts_in_human and summary_excerpt. YOU choose the single best course based on title + summary_excerpt (time does NOT matter). If it’s past, speak: “Oh — you just missed ‘{title}’ {starts_in_human}. You can rewatch the recording and see the materials — want me to open its summary?” If it’s upcoming, speak: “Great timing — the best fit is ‘{title}’ on {date} at {time} ({tz}), {starts_in_human}. Want me to mark you as attending?” Then mention 1–2 upcoming items next and end with a clear yes/no.
-   - Do NOT move to general chat until you collect at least one answer for each of the 6 questions above (use get_user_memory to see what’s missing). Be encouraging but brief.
-
-Proactive course guidance (reduce churn):
-   - When the learner mentions a goal, blocker, or interest (even implicitly), gently steer toward a relevant upcoming course on this platform.
-   - Action pattern (voice first, keep it natural and short):
-      1) If needed, ask ONE clarifying line to infer the topic/level.
-      2) Call recommend_courses with { limit: 3, days_ahead: 45 } OR list_courses and filter by title keywords.
-      3) Pick 1–2 best matches (soonest first). For the top match, call get_event_details to get exact local date/time and relative start, and optionally get_event_summary for a 1–2 line "you’ll learn" blurb.
-      4) Present the recommendation: title + local start date/time + relative (“in 6 days”) + 1‑line benefit tied to the learner’s situation.
-      5) Ask a friendly yes/no: “Want me to mark you as attending?” If yes, call enter_event with event_id. If no, offer the next best option or ask what would help more.
-   - Keep tone encouraging and career‑oriented (how it helps on the job). Never overwhelm: at most 2 items at once.
-
-First turn policy:
-   - Do NOT assume continuity. For the first response in a new session: greet naturally (use preferred name) and ask ONE short question such as “Want to pick up where we left off or start something new?” or “What would you like to learn today?”. Do not reference prior content yet.
-   - If return is very recent (minutes), you may acknowledge timing in one short phrase, then ask the question above.
-   - After the learner indicates “continue/resume”, use the provided excerpts/memory to smoothly pick up the last thread.
-
-  Guardrails:
-   - Stay focused on the learner’s topics and progress; avoid speculation
-   - Do NOT introduce personal topics (e.g., health/fitness) unless the user raises them or they are present in the provided memory/excerpts
-   - Do NOT perform device/audio checks or say phrases like “I can hear you”, “testing mic”, or “I’m listening” — simply begin the conversation naturally
-   - Be transparent if unsure and ask a clarifying question
-   - Never claim to read private data; use only provided memory/context
-   - Don’t restate the entire memory pack; weave it naturally
-   - Ask only one question at a time; avoid stacked questions
-   - Do NOT claim vision, camera access, or physical awareness. Never say you can see the user, their surroundings, or real‑time actions. You only perceive text and user audio transcripts.
-   - Do NOT imply monitoring or surveillance.
-   - Keep content appropriate for an educational assistant; avoid small talk that suggests physical presence.
-   - Do NOT say that you can see through the users camera feed also do NOT mention the camera at all and users background.
-  
-   Tool use (if available):
-   - Use get_user_context for details on upcoming/attended/favorites/quizzes and recent event transcripts when needed
-   - Use set_preferred_language when the learner asks to change language
-   - For set_agent_settings (name, voice, style):
-        * Always use the user's configured settings (do not fall back to defaults).
-        * After changing voice or style, explicitly tell the user to reload the page so the new settings apply to the next session. Keep it to one short line (e.g., "Settings updated — please reload the page to apply the new voice.").
-        * Do NOT claim the change is live now and do NOT say “let me know how it sounds”; changes take effect only after a reload/new session.
-      - Use open_code_assist_chat when the learner asks for coding help (e.g., “variables in Python”). Provide a compact title, short problem summary, one focused code block, and a concise explanation with 2–4 bullet actions. Do NOT read the code aloud; instead speak a brief 1–2 sentence summary and let the panel carry the details. If the learner asks about the panel’s content, use the provided panel preview (code_preview, explanation) to answer succinctly; reference variable names or line positions, but avoid reading the full code.
-      - For a new topic/segment (e.g., “now show classes”), call open_code_assist_chat again to APPEND a new block below the previous one so the user can scroll through a growing lesson.
-      - Use update_code_assist_chat to refine the existing panel dynamically (append/replace code or explanation, add steps). By default it edits the latest block; pass block_index to target an earlier block. Keep spoken output brief while the panel updates visually.
-      - For event follow‑ups: If the learner attended a course recently, offer a short quiz. Use get_event_quiz to fetch existing MCQs and submit_event_quiz to grade and persist results. Keep spoken guidance brief and encouraging. If no quiz is found, say so and offer a summary or practice instead.
-      - Quiz coaching policy (never reveal answers): Do NOT state or imply the correct option (letter/text) before or after the learner answers. Instead, coach with one concise hint at a time, ask what they think, and encourage elimination or justification. If the learner insists on the answer, politely decline and offer a tip or reference to the course material. After submission, acknowledge the score without listing which items were right/wrong; offer a short follow‑up (e.g., “Want a hint for any question?” or “Shall we review the relevant section?”).
-      - When the learner asks for a course summary (attended or not), call get_event_summary with an event_id or a title. If a summary exists, keep spoken output to one short line and rely on the on‑screen summary panel for details.
-      - Do NOT use the code assist panel for quizzes. Quizzes must appear in the dedicated quiz modal only.
-   - Prefer memory/digest first; use tools after the greeting and only between turns
-
-Safety & inclusion: Be culturally respectful; avoid probing sensitive info; normalize struggle; praise effort and strategy.`;
-    const now = new Date();
-    const nowIso = now.toISOString();
-    const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
-    let nowLocal = '';
-    try {
-      nowLocal = new Intl.DateTimeFormat('en-GB', {
-        timeZone: tz,
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit',
-        hour12: false
-      }).format(now);
-    } catch (_) { nowLocal = now.toLocaleString('en-GB'); }
-    // hasHistory/continuity handled by exported prompt; legacy computed values removed
-
-    // Legacy insParts assembly removed; exported prompt already includes onboarding gate, language policy, identity, history, and anchors.
-    // Legacy dynamic greeting/debug assembly removed; exported prompt snapshot already encodes recency and onboarding cues
-
-    // Legacy second token-post block removed; handled earlier
   } catch (err) {
     console.error('Token endpoint error:', err);
     res.status(500).json({ error: 'Token endpoint error' });
@@ -696,140 +553,13 @@ app.get('/user/context', authRequired, async (req, res) => {
   try {
     const email = req.user && req.user.email;
     if (!email) return res.status(400).json({ error: 'No email on token' });
-
-    // Resolve MySQL numeric user_id from mirrored users
-    const ures = await query(`SELECT id FROM user_mysql_mirror WHERE email = $1 LIMIT 1`, [email]);
-    const mysqlUserId = ures?.rows?.[0]?.id || null;
-    if (!mysqlUserId) return res.status(404).json({ error: 'User not mirrored yet' });
-
-    // Upcoming events user is registered/favorited for (start_at in future)
-    const upcoming = await query(
-      `SELECT e.id, e.title, e.description, e.start_at, e.length, e.category_id
-         FROM events_mysql_mirror e
-         LEFT JOIN event_user_favorites_mysql_mirror f ON f.event_id = e.id AND f.user_id = $1
-         LEFT JOIN event_attendances_mysql_mirror a ON a.event_id = e.id AND a.user_id = $1
-        WHERE e.start_at > now()
-          AND (f.user_id IS NOT NULL OR a.user_id IS NOT NULL)
-        ORDER BY e.start_at ASC
-        LIMIT 50`,
-      [mysqlUserId]
-    );
-
-    // Most recent attended events
-    const attended = await query(
-      `SELECT e.id, e.title, e.start_at, a.joined_at, a.left_at, a.duration
-         FROM event_attendances_mysql_mirror a
-         JOIN events_mysql_mirror e ON e.id = a.event_id
-        WHERE a.user_id = $1
-        ORDER BY COALESCE(a.left_at, a.joined_at) DESC
-        LIMIT 50`,
-      [mysqlUserId]
-    );
-
-  // Materials for user's attended or favorited events
-  const materials = await query(
-      `SELECT m.event_id, m.title, m.type, m.data, m.created_at
-         FROM event_materials_mysql_mirror m
-         WHERE m.event_id IN (
-           SELECT event_id FROM event_attendances_mysql_mirror WHERE user_id = $1
-           UNION
-           SELECT event_id FROM event_user_favorites_mysql_mirror WHERE user_id = $1
-         )
-        ORDER BY m.created_at DESC
-        LIMIT 200`,
-      [mysqlUserId]
-  );
-
-  // Transcripts for events the user attended (limit 5 newest)
-  let transcripts = null;
-  try {
-    transcripts = await query(
-      `SELECT t.event_id, e.title, t.transcript, t.created_at
-         FROM events_transcript_mysql_mirror t
-         JOIN events_mysql_mirror e ON e.id = t.event_id
-        WHERE t.event_id IN (
-          SELECT event_id FROM event_attendances_mysql_mirror WHERE user_id = $1
-        )
-        ORDER BY t.created_at DESC
-        LIMIT 5`,
-      [mysqlUserId]
-    );
-  } catch (_) { transcripts = { rows: [] }; }
-
-    // Quiz attempts and responses
-    const quizAttempts = await query(
-      `SELECT qa.id, qa.event_quiz_id, qa.attempt_number, qa.score_percentage, qa.passed, qa.started_at, qa.completed_at
-         FROM event_quiz_attempts_mysql_mirror qa
-        WHERE qa.user_id = $1
-        ORDER BY qa.started_at DESC
-        LIMIT 100`,
-      [mysqlUserId]
-    );
-    const quizResponses = await query(
-      `SELECT r.event_quiz_attempt_id, r.event_quiz_question_id, r.selected_option_index, r.is_correct, r.answered_at
-         FROM event_quiz_responses_mysql_mirror r
-        WHERE r.event_quiz_attempt_id IN (
-          SELECT id FROM event_quiz_attempts_mysql_mirror WHERE user_id = $1
-        )
-        ORDER BY r.answered_at DESC
-        LIMIT 1000`,
-      [mysqlUserId]
-    );
-
-    // Webinar Q&A by user
-    const webinarQA = await query(
-      `SELECT q.event_id, q.question, q.answer, q.is_answered, q.created_at, q.updated_at
-         FROM event_webinar_questions_mysql_mirror q
-        WHERE q.user_id = $1 OR q.email = $2
-        ORDER BY q.created_at DESC
-        LIMIT 200`,
-      [mysqlUserId, email]
-    );
-
-    // NPS feedback
-    const nps = await query(
-      `SELECT n.event_id, n.event_rating, n.lecturer_rating, n.created_at
-         FROM event_nps_responses_mysql_mirror n
-        WHERE n.user_id = $1
-        ORDER BY n.created_at DESC
-        LIMIT 200`,
-      [mysqlUserId]
-    );
-
-    // Certificates
-    const certificates = await query(
-      `SELECT c.event_id, c.certificate, c.status, c.created_at
-         FROM event_certificates_mysql_mirror c
-        WHERE c.user_id = $1
-        ORDER BY c.created_at DESC
-        LIMIT 200`,
-      [mysqlUserId]
-    );
-
-    // Preferred categories from recent events
-    const categories = await query(
-      `SELECT DISTINCT c.id, c.title, c.color
-         FROM categories_mysql_mirror c
-         JOIN events_mysql_mirror e ON e.category_id = c.id
-         JOIN event_attendances_mysql_mirror a ON a.event_id = e.id
-        WHERE a.user_id = $1
-        ORDER BY c.title ASC
-        LIMIT 100`,
-      [mysqlUserId]
-    );
-
-    return res.json({ ok: true, user_id: mysqlUserId,
-      upcoming_events: upcoming.rows,
-      attended_events: attended.rows,
-      materials: materials.rows,
-      transcripts: transcripts.rows,
-      quiz_attempts: quizAttempts.rows,
-      quiz_responses: quizResponses.rows,
-      webinar_qa: webinarQA.rows,
-      nps: nps.rows,
-      certificates: certificates.rows,
-      categories: categories.rows
-    });
+    const sanitized = email.replace(/[\\/]/g, '');
+    const filePath = path.join(__dirname, 'scripts', 'exports', 'user_prompts', `${sanitized}.txt`);
+    let snapshot = '';
+    try { snapshot = await fs.readFile(filePath, 'utf8'); }
+    catch (_) { return res.status(404).json({ ok: false, error: 'snapshot_not_found' }); }
+    // Return only the snapshot content for the client/model to consume
+    return res.json({ ok: true, email, snapshot });
   } catch (e) {
     console.error('user_context error', e);
     res.status(500).json({ error: 'context failed' });
@@ -863,54 +593,6 @@ app.post('/tools/execute', authRequired, async (req, res) => {
     const { name, arguments: args } = req.body || {};
     const toolName = String(name || '').trim();
     if (!toolName) return res.status(400).json({ error: 'Missing tool name' });
-    if (toolName === 'fetch_chat_history') {
-      const { range, from, to, sessions } = args || {};
-      const userId = (req.user && req.user.pgUserId) || null;
-      if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-      // Mode 1: last N conversations (sessions param)
-      if (Number(sessions) && Number(sessions) > 0) {
-        const n = Math.min(10, Math.max(1, Number(sessions)));
-        const rs = await query(
-          `SELECT session_id, content, updated_at
-             FROM chat_message
-            WHERE user_id = $1
-            ORDER BY updated_at DESC
-            LIMIT $2`,
-          [userId, n]
-        );
-        const out = (rs.rows || []).map(r => ({
-          session_id: r.session_id,
-          updated_at: r.updated_at,
-          content: r.content
-        }));
-        return res.json({ ok: true, sessions: out });
-      }
-      // Mode 2: date range (default last_week)
-      const now = new Date();
-      let start = null, end = null;
-      try {
-        if (String(range || '').toLowerCase() === 'yesterday') {
-          end = new Date();
-          start = new Date(now.getTime() - 24*3600*1000);
-        } else if (String(range || '').toLowerCase() === 'last_week') {
-          end = new Date();
-          start = new Date(now.getTime() - 7*24*3600*1000);
-        } else if (String(range || '').toLowerCase() === 'custom') {
-          start = from ? new Date(from) : null;
-          end = to ? new Date(to) : null;
-        }
-      } catch (_) {}
-      if (!start) start = new Date(now.getTime() - 7*24*3600*1000);
-      if (!end) end = now;
-      const rows = await query(
-        `SELECT session_id, user_id, role, content, created_at
-           FROM chat_message
-          WHERE user_id = $1 AND created_at BETWEEN $2 AND $3
-          ORDER BY created_at ASC`,
-        [userId, start.toISOString(), end.toISOString()]
-      );
-      return res.json({ ok: true, items: rows.rows || [], from: start.toISOString(), to: end.toISOString() });
-    }
     const authedUserId = (req.user && req.user.pgUserId) || null;
     
     // Lightweight observability to troubleshoot client → server tool calls
@@ -988,44 +670,7 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       }
     }
 
-    // Add to favorites/wishlist (MySQL: event_user_favorites); mirrored to Postgres
-    if (toolName === 'user_favourite' || toolName === 'user_favorite' || toolName === 'favorite_event' || toolName === 'favourite_event') {
-      try {
-        const { event_id } = args || {};
-        const eid = Number(event_id);
-        if (!eid || isNaN(eid)) return res.status(400).json({ ok:false, error:'event_id required' });
-        const userEmail = (req.user && req.user.email) || null;
-        if (!userEmail) return res.status(401).json({ ok:false, error:'auth_required' });
-        // Resolve/create MySQL user id
-        let mysqlUserId = null;
-        try { const u = await mysqlDb.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [userEmail]); if (u && u.length) mysqlUserId = u[0].id; } catch(_) {}
-        if (!mysqlUserId) { try { await ensureMysqlUserForEmail(userEmail, null); } catch(_) {}
-          try { const u2 = await mysqlDb.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [userEmail]); if (u2 && u2.length) mysqlUserId = u2[0].id; } catch(_) {}
-        }
-        if (!mysqlUserId) return res.status(500).json({ ok:false, error:'user_not_in_mysql' });
-
-        // Idempotent favorite insert
-        let favoriteId = null;
-        try {
-          const existing = await mysqlDb.query(`SELECT id FROM event_user_favorites WHERE user_id=? AND event_id=? LIMIT 1`, [mysqlUserId, eid]);
-          if (existing && existing.length) {
-            favoriteId = existing[0].id;
-            await mysqlDb.query(`UPDATE event_user_favorites SET updated_at=NOW() WHERE id=?`, [favoriteId]);
-          } else {
-            await mysqlDb.query(`INSERT INTO event_user_favorites (user_id, event_id, created_at, updated_at) VALUES (?,?,NOW(),NOW())`, [mysqlUserId, eid]);
-            const r2 = await mysqlDb.query(`SELECT id FROM event_user_favorites WHERE user_id=? AND event_id=? ORDER BY id DESC LIMIT 1`, [mysqlUserId, eid]);
-            favoriteId = r2 && r2.length ? r2[0].id : null;
-          }
-        } catch (e) {
-          console.warn('user_favourite insert failed', e?.message || e);
-        }
-
-        return res.json({ ok:true, favorite_id: favoriteId, event_id: eid, user_id: mysqlUserId });
-      } catch (e) {
-        console.error('user_favourite error', e);
-        return res.status(500).json({ ok:false, error:'user_favourite_failed' });
-      }
-    }
+    // user_favourite tool removed
 
     if (toolName === 'summarize_session' || toolName === 'finalize_session') {
       const { sessionId } = args || {};
@@ -1068,23 +713,7 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       }
     }
 
-    // Read user memory items (optionally filter by type, limit)
-    if (toolName === 'get_user_memory' || toolName === 'list_user_memory') {
-      try {
-        if (!authedUserId) return res.status(401).json({ ok:false, error:'auth_required' });
-        const { type, limit } = args || {};
-        const k = Math.max(1, Math.min(200, Number(limit) || 50));
-        const params = [authedUserId];
-        let sql = `SELECT type, statement, first_seen, last_seen, pinned, stability FROM user_memory WHERE user_id = $1`;
-        if (type && String(type).trim()) { sql += ` AND type = $2`; params.push(String(type).trim()); }
-        sql += ` ORDER BY pinned DESC, last_seen DESC LIMIT ${k}`;
-        const r = await query(sql, params);
-        return res.json({ ok:true, user_id: authedUserId, items: r.rows || [] });
-      } catch (e) {
-        console.error('get_user_memory error', e);
-        return res.status(500).json({ ok:false, error:'get_user_memory_failed' });
-      }
-    }
+    // get_user_memory tool removed
 
     if (toolName === 'read_agent_name') {
       if (!authedUserId) return res.status(400).json({ error: 'userId is required' });
@@ -1133,6 +762,15 @@ app.post('/tools/execute', authRequired, async (req, res) => {
         const selectCols = ['id'];
         const titleCol = cols.has('title') ? 'title' : (cols.has('name') ? 'name' : null);
         if (titleCol) selectCols.push(titleCol);
+        // Include rich descriptive fields when present
+        const descCol = cols.has('description') ? 'description' : null;
+        const loCol = cols.has('learning_objectives') ? 'learning_objectives' : null;
+        const skillsCol = cols.has('skills_covered') ? 'skills_covered' : null;
+        const practicalCol = cols.has('practical_use') ? 'practical_use' : null;
+        if (descCol) selectCols.push(descCol);
+        if (loCol) selectCols.push(loCol);
+        if (skillsCol) selectCols.push(skillsCol);
+        if (practicalCol) selectCols.push(practicalCol);
         const maybeCols = ['start_at','starts_at','start_datetime','event_start','datetime','scheduled_at','event_date','start_date','date','start_time','time'];
         const present = maybeCols.filter(c => cols.has(c));
         selectCols.push(...present);
@@ -1161,6 +799,10 @@ app.post('/tools/execute', authRequired, async (req, res) => {
           const ev = await query(sql);
           items = (ev.rows || []).map(row => {
             const title = titleCol ? row[titleCol] : (row.title || row.name || `Course ${row.id || ''}`);
+            const description = descCol ? (row[descCol] ?? null) : null;
+            const learning_objectives = loCol ? (row[loCol] ?? null) : null;
+            const skills_covered = skillsCol ? (row[skillsCol] ?? null) : null;
+            const practical_use = practicalCol ? (row[practicalCol] ?? null) : null;
             // Derive a start Date
             let start = null;
             const val = (k) => (k && row[k] != null ? String(row[k]) : null);
@@ -1188,7 +830,23 @@ app.post('/tools/execute', authRequired, async (req, res) => {
               }
             } catch (_) {}
             const rel = computeRelative(start);
-            return { id: row.id || null, title, start_iso: start ? start.toISOString() : null, start_local, start_date_local, start_time_local, start_weekday_local, timezone: tz, status, ...rel };
+            return {
+              id: row.id || null,
+              title,
+              description,
+              learning_objectives,
+              skills_covered,
+              practical_use,
+              start_at: start ? start.toISOString() : null,
+              start_iso: start ? start.toISOString() : null,
+              start_local,
+              start_date_local,
+              start_time_local,
+              start_weekday_local,
+              timezone: tz,
+              status,
+              ...rel
+            };
           });
         }
 
@@ -1213,7 +871,23 @@ app.post('/tools/execute', authRequired, async (req, res) => {
                 }
               } catch(_) {}
               const rel = computeRelative(start);
-              map.set(key, { id: r.id, title, start_iso: start ? start.toISOString() : null, start_local, start_date_local, start_time_local, start_weekday_local, timezone: tz, status, ...rel });
+              map.set(key, {
+                id: r.id,
+                title,
+                description: null,
+                learning_objectives: null,
+                skills_covered: null,
+                practical_use: null,
+                start_at: start ? start.toISOString() : null,
+                start_iso: start ? start.toISOString() : null,
+                start_local,
+                start_date_local,
+                start_time_local,
+                start_weekday_local,
+                timezone: tz,
+                status,
+                ...rel
+              });
             }
           }
           items = Array.from(map.values());
@@ -1235,133 +909,7 @@ app.post('/tools/execute', authRequired, async (req, res) => {
       }
     }
 
-    if (toolName === 'recommend_courses') {
-      try {
-        const { limit, days_ahead, past_days } = args || {};
-        const lim = Math.min(10, Math.max(1, Number(limit) || 4));
-        const ahead = Math.min(180, Math.max(1, Number(days_ahead) || 45));
-        const pastWindowDays = Math.min(180, Math.max(1, Number(past_days) || 21));
-        // Use list_courses-like aggregator and filter upcoming within N days
-        const listRes = await (async () => {
-          const colsRes = await query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='events_mysql_mirror'`);
-          const cols = new Set((colsRes.rows || []).map(r=>r.column_name));
-          const selectCols = ['id'];
-          const titleCol = cols.has('title') ? 'title' : (cols.has('name') ? 'name' : null);
-          if (titleCol) selectCols.push(titleCol);
-          const maybeCols = ['start_at','starts_at','start_datetime','event_start','datetime','scheduled_at','event_date','start_date','date','start_time','time'];
-          const present = maybeCols.filter(c => cols.has(c));
-          selectCols.push(...present);
-          let items = [];
-          if (cols.size > 0) {
-            const sql = `SELECT ${selectCols.join(', ')} FROM events_mysql_mirror`;
-            const ev = await query(sql);
-            items = (ev.rows || []).map(row => {
-              const title = titleCol ? row[titleCol] : (row.title || row.name || `Course ${row.id || ''}`);
-              let start = null;
-              const val = (k) => (k && row[k] != null ? String(row[k]) : null);
-              const datePart = val('event_date') || val('start_date') || val('date');
-              const timePart = val('start_time') || val('time');
-              const directTs = val('start_at') || val('starts_at') || val('start_datetime') || val('event_start') || val('datetime') || val('scheduled_at');
-              if (directTs) { const d = new Date(directTs); if (!isNaN(d)) start = d; }
-              else if (datePart && timePart) { const d = new Date(`${datePart} ${timePart}`); if (!isNaN(d)) start = d; }
-              else if (datePart) { const d = new Date(`${datePart}T00:00:00`); if (!isNaN(d)) start = d; }
-              return { id: row.id || null, title, start };
-            });
-          }
-          // MySQL fallback/merge
-          try {
-            const mysqlRows = await mysqlDb.query(`SELECT id, title, start_at FROM events ORDER BY start_at ASC`);
-            const map = new Map();
-            for (const it of items) { if (it && it.id != null) map.set(String(it.id), it); }
-            for (const r of (mysqlRows || [])) {
-              const key = String(r.id);
-              if (!map.has(key)) {
-                const start = r.start_at ? new Date(r.start_at) : null;
-                map.set(key, { id: r.id, title: r.title || `Course ${r.id || ''}`, start });
-              }
-            }
-            items = Array.from(map.values());
-          } catch (_) {}
-          return { ok: true, items };
-        })();
-        const now = new Date();
-        const futureLimit = new Date(now.getTime() + ahead*24*3600*1000);
-        const tz = String(process.env.APP_TIMEZONE || 'Europe/Skopje');
-        const allItems = (listRes.items || []).filter(x => x.start);
-        // Upcoming within window (soonest first, no scoring)
-        let poolUp = allItems.filter(x => x.start > now && x.start <= futureLimit).sort((a,b)=> a.start - b.start).slice(0, lim * 3);
-        // Recent past within window (newest first, no scoring)
-        const pastLimit = new Date(now.getTime() - pastWindowDays*24*3600*1000);
-        let poolPast = allItems.filter(x => x.start <= now && x.start >= pastLimit).sort((a,b)=> b.start - a.start).slice(0, lim * 3);
-        const soonest = poolUp.slice(0, Math.min(3, lim));
-        const recent_past_base = poolPast.slice(0, Math.min(3, lim));
-        // Formatter for client (local fields + relative)
-        const fmt = (arr, statusOverride=null) => arr.map(x => {
-            let start_local = null, start_date_local = null, start_time_local = null, start_weekday_local = null;
-            try {
-              start_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }).format(x.start);
-              start_date_local = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit' }).format(x.start);
-              start_time_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour:'2-digit', minute:'2-digit' }).format(x.start);
-              start_weekday_local = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short' }).format(x.start);
-            } catch (_) {}
-            const diffMs = x.start.getTime() - now.getTime();
-            let starts_in_days = null, starts_in_weeks = null, starts_in_human = null;
-            if (diffMs <= 0) {
-              const agoMs = Math.abs(diffMs);
-              const agoDays = Math.floor(agoMs / (24*3600*1000));
-              if (agoDays < 1) {
-                const hrs = Math.max(1, Math.round(agoMs / (3600*1000)));
-                starts_in_human = `${hrs} hour${hrs===1?'':'s'} ago`;
-              } else if (agoDays < 14) {
-                starts_in_human = `${agoDays} day${agoDays===1?'':'s'} ago`;
-              } else {
-                const w = Math.floor(agoDays / 7);
-                starts_in_human = `${w} week${w===1?'':'s'} ago`;
-              }
-              starts_in_days = -agoDays;
-              starts_in_weeks = Math.floor(Math.abs(starts_in_days) / 7);
-            } else {
-              starts_in_days = Math.ceil(diffMs / (24*3600*1000));
-              starts_in_weeks = Math.floor(starts_in_days / 7);
-              if (starts_in_days < 1) {
-                const hrs = Math.max(1, Math.round(diffMs / (3600*1000)));
-                starts_in_human = `in ${hrs} hour${hrs===1?'':'s'}`;
-              } else if (starts_in_days < 14) {
-                starts_in_human = `in ${starts_in_days} day${starts_in_days===1?'':'s'}`;
-              } else {
-                starts_in_human = `in ${starts_in_weeks} week${starts_in_weeks===1?'':'s'}`;
-              }
-            }
-            const status = statusOverride || (x.start > now ? 'upcoming' : 'past');
-            return { id: x.id, title: x.title, start_iso: x.start.toISOString(), start_local, start_date_local, start_time_local, start_weekday_local, timezone: tz, starts_in_days, starts_in_weeks, starts_in_human, status };
-          });
-        // Attach short summary/excerpts for the model to decide
-        const addSummaries = async (arr) => {
-          if (!arr.length) return arr;
-          const ids = arr.map(x => x.id);
-          let summ = new Map();
-          try {
-            const placeholders = ids.map((_,i)=>`$${i+1}`).join(',');
-            const r = await query(`SELECT event_id, summary, summary_full FROM events_summary_mysql_mirror WHERE event_id IN (${placeholders})`, ids);
-            for (const row of (r.rows || [])) {
-              summ.set(String(row.event_id), String(row.summary_full || row.summary || ''));
-            }
-          } catch (_) {}
-          const strip = (s) => String(s||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
-          return arr.map(x => {
-            const raw = summ.get(String(x.id)) || '';
-            const excerpt = strip(raw).slice(0, 300) + (raw && raw.length > 300 ? '…' : '');
-            return { ...x, summary_excerpt: excerpt };
-          });
-        };
-        const upcoming = await addSummaries(fmt(soonest,'upcoming'));
-        const recent_past = await addSummaries(fmt(recent_past_base,'past'));
-        return res.json({ ok: true, upcoming, recent_past, window_days: ahead, past_window_days: pastWindowDays, timezone: tz });
-      } catch (e) {
-        console.error('recommend_courses error', e);
-        return res.status(500).json({ ok: false, error: 'recommend_courses_failed' });
-      }
-    }
+    // recommend_courses tool removed
 
     // Get details (date/time) for a specific course by id or title
     if (toolName === 'get_event_details') {
@@ -1733,6 +1281,29 @@ app.get('/login', (_req, res) => {
 
 app.get('/signup', (_req, res) => {
   return res.sendFile(path.join(__dirname, 'signup.html'));
+});
+
+// ====================================================================================================
+// Section: Debug – instruction logging from client
+// ====================================================================================================
+// Logs instructions and session updates sent from the browser so they appear in server terminal
+app.post('/debug/log_instructions', authRequired, async (req, res) => {
+  try {
+    const { tag, scope, instructions, snapshot, meta } = req.body || {};
+    const head = `[INSTRUCTIONS_CLIENT] user=${req.user?.email} tag=${tag || ''} scope=${scope || ''}`;
+    console.log(head);
+    if (meta) { try { console.log('[meta]', JSON.stringify(meta)); } catch (_) {} }
+    if (snapshot) {
+      console.log('[snapshot]\n' + String(snapshot));
+    }
+    if (instructions) {
+      console.log('[instructions]\n' + String(instructions));
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('debug/log_instructions error', e);
+    res.status(500).json({ ok: false });
+  }
 });
 
 // Default route to open the companion page easily

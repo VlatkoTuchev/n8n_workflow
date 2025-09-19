@@ -135,24 +135,88 @@ Language Policy:
 - Do NOT switch languages unless the user explicitly asks to change language.
 - If incoming speech is in a different language, ask a one-line confirmation before switching.
 
-Current date/time (Europe/Skopje): 11/09/2025, 09:37:46
+Current date/time (Europe/Skopje): 11/09/2025, 21:43:22
 
-Current date/time (UTC): 2025-09-11T07:37:46.953Z
+Current date/time (UTC): 2025-09-11T19:43:22.886Z
 
 Context for personalization:
 User Name: vlatko <vlatko@test.com>
 Preferred language: English
-Categories: AI
-Upcoming Courses (new): Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
-Attended Course: Past Workshop
-Favorites Courses: Intro to Vector Databases
-Quizzes (recent): 13002:95%✓
+
+Course catalog (full, compact):
+[1] Intro to AI
+- Start: 2025-08-30 14:31 (Europe/Skopje), started
+- Description: Foundations of AI
+- Learning objectives: ["Understand AI landscape","Basic terminology"]
+- Skills covered: ["Prompting","Evaluation"]
+- Practical use: Hands-on demos
+
+[2] Intro to Vector Databases
+- Start: 2025-08-31 20:13 (Europe/Skopje), started
+- Description: Hands-on pgvector
+- Learning objectives: ["Embeddings","ANN"]
+- Skills covered: ["SQL","Vectors"]
+- Practical use: Build search
+
+[3] Kafka Connect Deep Dive
+- Start: 2025-09-03 20:13 (Europe/Skopje), started
+- Description: CDC, Debezium, sinks
+- Learning objectives: ["CDC","Connect"]
+- Skills covered: ["Kafka","ETL"]
+- Practical use: CDC pipelines
+
+[4] Past Workshop
+- Start: 2025-08-22 20:13 (Europe/Skopje), started
+- Description: Completed
+
+[5] Prompt Engineering: Personalizing LinkedIn Profiles
+- Start: 2025-09-01 15:08 (Europe/Skopje), started
+- Description: A practical course on designing prompts to improve LinkedIn profiles, led by Shazia. Learn to audit profiles, craft prompt systems, and generate achievement bullets, About summaries, and headlines consistent with your professional brand.
+- Learning objectives: ["Audit a LinkedIn profile and identify gaps","Design prompt systems for consistent tone and structure","Generate achievement bullets with quantifiable outcomes","Write About summaries and headlines tailored to audience","Build reusable prompt libraries for ongoing updates"]
+- Skills covered: ["Prompt engineering","Professional branding","Copywriting","LinkedIn","LLM prompting"]
+- Practical use: Participants leave with ready-to-use prompts and a repeatable workflow to refresh their LinkedIn profile.
+
+[6] KPI Dashboard Automation with Karim Wanny
+- Start: 2025-09-09 09:00 (Europe/Skopje), started
+- Description: Learn how to automate KPI dashboards with Google Sheets and GenAI-powered functions. Karim Wanny (Growth Mentor at Nasdaq Entrepreneurial Center) shows how to connect data sources, design executive-ready dashboards, and eliminate hours of manual reporting.
+- Learning objectives: ["Design KPI dashboards connected to live data sources","Apply GenAI functions in Google Sheets for reporting automation","Build automated workflows to replace manual data collection and formatting","Structure dashboards for executive-ready reporting and decision-making"]
+- Skills covered: ["KPI dashboards","Google Sheets","GenAI functions","Automation","Reporting","Data visualization"]
+- Practical use: Hands-on micro course to build automated KPI dashboards and reduce manual reporting time.
+
+[7] Build a 3-step AI email-summary bot
+- Start: 2025-09-11 09:00 (Europe/Skopje), started
+- Description: Fast, hands-on AI Lab to build a working email-summary bot in about 60 minutes using low-code tools. Follow a structured workflow from labeled inbox feed to polished summaries while chaining multiple AI services and simple automations in parallel. Live demos use free or freemium tools and no coding background is required.
+- Learning objectives: ["Apply a 3-step pipeline: ingest -> summarize -> deliver","Run multiple AI tools in parallel and pick best roles for each","Design prompt templates with structure and tone constraints","Automate delivery to Email, Slack, Notion, or Docs with logging","Add guardrails for credibility, privacy, and relevance"]
+- Skills covered: ["AI summarization","Prompt design","Automation","Slack","Email","Notion","Pipelines","Guardrails"]
+- Practical use: Turn inbox noise into decision-ready briefs by building an email-summary bot with low-code tools and simple automations.
+
+[8] Empathy in the era of AI
+- Start: 2025-09-18 09:00 (Europe/Skopje), in 7 days
+- Description: A fast-paced, hands-on micro lesson on designing empathetic AI interactions with everyday assistants (e.g., Microsoft Copilot). In 60 minutes you will learn to read emotional context, pick a matching tone, and craft prompts that keep humans at the center while adding lightweight guardrails for consent, privacy, and explainability.
+- Learning objectives: ["Identify user emotion and intent signals; choose a matching tone (reassure, clarify, de-escalate)","Turn empathy into structure with context-rich prompt frames","Add lightweight guardrails for consent, privacy, and explainability","Run quick optimization loops to improve helpfulness and safety"]
+- Skills covered: ["Prompt design","Conversation tone control","Safety guardrails","Copilot/assistant skills","Customer support","Change management"]
+- Practical use: Design short, reliable prompt templates that make assistants more considerate, safe, and useful in real conversations.
+
+[9] 30-Minute Market Research with AI: From Weeks to Minutes
+- Start: 2025-09-24 09:00 (Europe/Skopje), in 13 days
+- Description: This Micro Lesson shows how to run a complete, marketing-focused market research project in just 30 minutes using AI tools. You'll follow a structured workflow from research brief to actionable insights while using multiple AI platforms in parallel (ChatGPT, Perplexity, Gemini, and others). No technical background required.
+- Learning objectives: ["Apply a structured, step-by-step AI research workflow to compress weeks into 30 minutes","Use multiple AI tools in parallel and identify where each adds the most value","Transform raw outputs into concise, decision-ready briefs","Create presentations and summaries tailored to different audiences and formats","Integrate AI-powered market research into ongoing marketing strategy and planning","Avoid common pitfalls and ensure credibility and relevance of findings"]
+- Skills covered: ["Market research","Prompting","Synthesis","Competitive scan","Brief writing","Presentation","ChatGPT","Perplexity","Gemini"]
+- Practical use: Hands-on workflow to scope questions, run deep searches across tools, organize findings, and deliver decision-ready briefs and slides in 30 minutes.
+
+[10] AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
+- Start: 2025-09-29 09:00 (Europe/Skopje), in 2 weeks
+- Description: A 3.5‑hour, hands-on masterclass to automate competitive analysis with AI. Learn step‑by‑step workflows—from defining objectives and deep single‑competitor investigations to parallel automation across a CSV list—using two code repositories (Notion DB pipeline and Sales Battlecards generator). Includes prompt engineering techniques, Google Slides automation, and alternative deep‑research interfaces (Gemini/Perplexity).
+- Learning objectives: ["Define competitive analysis objectives and design a research schema with AI prompts","Apply prompt engineering for deep single‑competitor investigations","Automate parallel research on multiple competitors from a CSV and populate a Notion database","Customize a battlecard repository and generate Google Slides automatically","Integrate alternative research interfaces (Gemini/Perplexity) and merge outputs","Maintain workflows as markets change: monitoring, deltas, and refresh strategy"]
+- Skills covered: ["Competitive analysis","Prompt engineering","Automation pipelines","Notion API","Google Slides","CSV processing","Gemini","Perplexity","Data synthesis"]
+- Practical use: End‑to‑end automated competitor research: run parallel scans from a CSV, store insights in Notion, and generate sales battlecards in Google Slides, with clear prompts and maintenance plan.
+
 
 User identity:
 - Preferred display name for the learner: vlatko.
 
-Last conversation (full transcript):
-Last conversation [2025-08-29T21:29:28.927Z | local 29/08/2025, 23:29:28]
+Last conversations (newest first; full transcripts):
+Conversation [2025-08-29T21:29:28.927Z | local 29/08/2025, 23:29:28]
 Assistant: Здраво! Како си? Што научи интересно последно? Сакаш ли да продолжиме таму каде што застанавме со медицината?
 User: If you speak in English, please make that my preferred language.
 Assistant: Sure, I'll speak in English from now on. What can I help you with today?
@@ -171,6 +235,32 @@ User: Do you know which are my favorites?
 Assistant: I don’t have a list of your favorite courses or topics yet. If you have any favorites or areas you're more passionate about, feel free to share them and I can keep that in mind for the future!
 User: Are there any questions from webinars?
 Assistant: Yes, you asked a question during a webinar about how to size Connect, and the answer was to use CPU-bound sizing and monitor lag. Let me know if you have more questions or if you'd like more details on anything.
+
+Conversation [2025-08-29T21:25:35.981Z | local 29/08/2025, 23:25:35]
+Assistant: Здраво! Како си денес? Што учеше последно и дали сакаш да продолжиме од таму? Кажи ми што најмногу те интересира во моментов.
+User: Hey, can you hear me, can you dance?
+Assistant: Те слушам! Еве, почнувам да играм! Каква музика би сакал да замислиш додека танцувам?
+
+Conversation [2025-08-29T21:24:56.418Z | local 29/08/2025, 23:24:56]
+Assistant: Здраво! Како си? Што учеше последно во врска со медицината, и дали сакаш да продолжиме од таму? Ајде да видиме како можам да ти помогнам понатаму!
+User: Hey, can you hear me? Can you hear me? Can you speak English?
+Assistant: Yes, I can hear you, and I can speak English as well. How can I help you today?
+User: What do you have in the context memory?
+Assistant: I remember that we were talking about your interest in medicine, and we had a conversation in Macedonian about different areas you might want to explore within the field. You also asked about courses or resources that might be useful for you right now in your studies. Let me know if you'd like me to focus on anything specific or if you have new questions!
+
+Conversation [2025-08-29T21:24:07.634Z | local 29/08/2025, 23:24:07]
+Assistant: Здраво! Како си денес? Што ново научи во последно време и дали сакаш да продолжиме да зборуваме за нешто од областа на медицината?
+User: Can you tell me about the upcoming courses?
+Assistant: I don’t have access to your specific schedule or courses, but if you tell me more about what you’re studying right now or what topics you’re interested in, I can give you some suggestions or information related to those areas. Are you focusing more on general medicine, surgery, or something else?
+
+Conversation [2025-08-29T21:23:43.271Z | local 29/08/2025, 23:23:43]
+Assistant: Здраво! Како си денес? Што учеше последно и дали сакаш да продолжиме таму каде што застанавме? Може да разговараме за било која тема во медицината која те интересира. Ме интересира што најмногу ти беше корисно досега.
+Assistant: Здраво Владко! Како си денес? Продолжуваме со разговорот за медицина или имаш нешто ново на што би сакал да
+Assistant: Кај си сега денес? Дали си на факултет или дома? Можеме да зборуваме за нешто што те интересира во врска со студиите или идните пл
+User: Kajmi, Kajmi, pardon.
+Assistant: Кажи, слободно. Што сакаш да споделиш или да ме прашаш?
+User: Заверши.
+Assistant: Секако, ќе завршиме кога ќе ти одговарам на прашањето што го имаш. Ако сакаш да завршиме разговорот тука, само кажи ми. Ако имаш уште нешто, слободно кажи.
 
 Continuation anchor (for follow‑up after first turn):
 - Last user message : "Are there any questions from webinars?"

@@ -6,6 +6,7 @@
     <title>Course Finder Buddy - Your AI Learning Companion</title>
     <link rel="stylesheet" href="/auth.css" />
     <script src="/auth-bg.js" defer></script>
+    <script src="/personalize.js" defer></script>
     <!-- See docs/CODE_OVERVIEW.md#client-functions for per‑function explanations -->
     <!--
       File map (quick orientation)
@@ -270,6 +271,8 @@
             <p>Your AI-powered learning companion for discovering the perfect courses</p>
         </div>
         <div class="actions">
+            <button class="logout-btn" id="startAssistantBtn" title="Start the assistant">🗣️ Talk to Assistant</button>
+            <button class="logout-btn" id="personalizeBtn" title="Personalize your learning">✨ Personalize with AI</button>
             <button class="logout-btn mute-btn" id="muteBtn" aria-pressed="false" title="Toggle microphone" data-muted="false"><span class="mute-label">🎙️ Mic On</span><span class="mute-ind"></span></button>
             <button class="logout-btn" id="logoutBtn">Log out</button>
         </div>
@@ -640,6 +643,9 @@
                 const remoteAudioEl = document.getElementById('remoteAudio') || (()=>{
                     const a = document.createElement('audio'); a.id='remoteAudio'; a.autoplay=true; a.playsInline=true; a.style.display='none'; document.body.appendChild(a); return a;
                 })();
+                try { window.__REMOTE_AUDIO = remoteAudioEl; } catch(_) {}
+                // Proactively attempt to start playback during the user gesture that triggered this call
+                try { await remoteAudioEl.play(); } catch(_) {}
                 let remoteAudioAttached = false;
                 const ensurePlayback = async () => {
                     try { await remoteAudioEl.play(); }
@@ -741,12 +747,30 @@
                 pc.oniceconnectionstatechange = () => console.log('ICE state:', pc.iceConnectionState);
                 pc.onconnectionstatechange = () => console.log('PC state:', pc.connectionState);
 
+                // Utility: timeout guard for awaits
+                const withTimeout = (p, ms, label='op') => new Promise((res, rej) => {
+                    let t = setTimeout(() => rej(new Error(label+':timeout')), Math.max(500, ms));
+                    p.then(v => { clearTimeout(t); res(v); }).catch(e => { clearTimeout(t); rej(e); });
+                });
+
                 let dcResolve;
                 const dataChannelReady = new Promise((resolve) => { dcResolve = resolve; });
                 const dc = pc.createDataChannel('oai-events');
                 dc.onopen = () => dcResolve();
                 dc.onerror = (e) => console.warn('DataChannel error:', e);
                 dc.onclose = () => console.log('DataChannel closed');
+                try { window.__DC = dc; } catch(_) {}
+                // Expose a helper to cancel any active response (used by personalization flow)
+                try { window.cancelActiveResponse = function(){ try { dc.send(JSON.stringify({ type:'response.cancel' })); } catch(_) {} }; } catch(_) {}
+                // Debug: send instructions to server logs
+                async function debugLogInstructions(tag, scope, text, extra){
+                    try {
+                        await fetch('/debug/log_instructions', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ tag, scope, instructions: text, meta: extra || null })
+                        });
+                    } catch(_) {}
+                }
 
                 // [CA2.3] Microphone capture + toggle wiring
                 try {
@@ -835,7 +859,8 @@
                 const localSdp = pc.localDescription && pc.localDescription.sdp ? pc.localDescription.sdp : offer.sdp;
 
                 // Prefer server-side SDP exchange proxy (avoids CORS and header pitfalls)
-                const sdpAnswer = await fetch('/realtime/sdp', {
+                const sdpController = new AbortController();
+                const sdpAnswer = await withTimeout(fetch('/realtime/sdp', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/sdp',
@@ -843,8 +868,9 @@
                         // Pass ephemeral token so the upstream session uses server-built instructions
                         'X-OpenAI-Session-Token': openAiSessionToken
                     },
-                    body: localSdp
-                }).then(r => r.text());
+                    body: localSdp,
+                    signal: sdpController.signal
+                }).then(r => r.text()), 15000, 'sdp');
 
                 if (!sdpAnswer || !/^v=0/m.test(sdpAnswer)) {
                     console.error('Invalid SDP answer from server:', sdpAnswer?.slice(0, 200));
@@ -853,7 +879,19 @@
 
                 await pc.setRemoteDescription({ type: 'answer', sdp: sdpAnswer });
 
-                await dataChannelReady;
+                // Wait for DataChannel open; if it doesn't open, abort cleanly to avoid
+                // creating sessions or saving chat without a live model connection.
+                let dcOpened = false;
+                try {
+                    await withTimeout(dataChannelReady, 12000, 'datachannel');
+                    dcOpened = (dc && dc.readyState === 'open');
+                } catch (e) {
+                    console.warn('DataChannel open timeout', e?.message || e);
+                }
+                if (!dcOpened) {
+                    try { pc.close(); } catch (_) {}
+                    throw new Error('Realtime data channel did not open');
+                }
                 // Apply server-selected voice once channel is ready (no-op if unchanged)
                 try { if (sessionPreferredVoice) dc.send(JSON.stringify({ type: 'session.update', session: { voice: sessionPreferredVoice } })); } catch (_) {}
 
@@ -914,18 +952,6 @@
                         name: 'set_fight',
                         description: 'Switch the 3D avatar to boxing/fighting animation',
                         parameters: { type: 'object', properties: {}, additionalProperties: false },
-                    },
-                    {
-                        type: 'function',
-                        name: 'get_event_details',
-                        description: 'Get exact local date/time and relative start (days/weeks) for a specific course by id or title.',
-                        parameters: { type: 'object', properties: { event_id: { type: 'number' }, title: { type: 'string' } }, additionalProperties: false }
-                    },
-                    {
-                        type: 'function',
-                        name: 'get_user_context',
-                        description: 'Fetch enriched user context (upcoming, attended, favorites, quizzes, webinar Qs) from the server',
-                        parameters: { type: 'object', properties: {}, additionalProperties: false }
                     },
                     {
                         type: 'function',
@@ -992,54 +1018,21 @@
                             additionalProperties: false
                         }
                     },
-                    {
-                        type: 'function',
-                        name: 'fetch_chat_history',
-                        description: 'Fetch chat logs by time window (yesterday, last_week, or custom date range)',
-                        parameters: {
-                            type: 'object',
-                            properties: {
-                                range: { type: 'string', enum: ['yesterday','last_week','custom'] },
-                                from: { type: 'string', description: 'ISO date for custom range start' },
-                                to: { type: 'string', description: 'ISO date for custom range end' }
-                            },
-                            required: ['range'],
-                            additionalProperties: false
-                        }
-                    },
+                    
                     {
                         type: 'function',
                         name: 'list_courses',
                         description: 'List all courses with local start date/time (start_local, start_date_local=YYYY-MM-DD, start_time_local=HH:mm, weekday), timezone, and status (upcoming/today/past).',
                         parameters: { type: 'object', properties: {}, additionalProperties: false }
                     },
-                    {
-                        type: 'function',
-                        name: 'recommend_courses',
-                        description: 'Recommend up to N upcoming courses within a days-ahead window; accepts optional keywords to bias titles; includes local date/time fields like list_courses.',
-                        parameters: {
-                            type: 'object',
-                            properties: {
-                                limit: { type: 'number' },
-                                days_ahead: { type: 'number' },
-                                keywords: { anyOf: [ { type: 'string' }, { type: 'array', items: { type: 'string' } } ] },
-                                priority_keywords: { anyOf: [ { type: 'string' }, { type: 'array', items: { type: 'string' } } ] }
-                            },
-                            additionalProperties: false
-                        }
-                    },
+                    
                     {
                         type: 'function',
                         name: 'enter_event',
                         description: 'Mark the current user as attending an event (joins the event)',
                         parameters: { type: 'object', properties: { event_id: { type: 'number' } }, required: ['event_id'], additionalProperties: false }
                     },
-                    {
-                        type: 'function',
-                        name: 'user_favourite',
-                        description: 'Add the event to the user\'s favorites/wishlist (event_user_favorites).',
-                        parameters: { type: 'object', properties: { event_id: { type: 'number' } }, required: ['event_id'], additionalProperties: false }
-                    }
+                    
                 ];
 
                 // Configure the session: VAD, transcription, tools, memory policy (do not override server voice/instructions)
@@ -1091,7 +1084,10 @@
                     try {
                         const uid = await getUserId();
                         if (!uid) return;
-                        const sid = await getOrCreateSessionId(uid);
+                        // getOrCreateSessionId was not defined in this scope; inline the logic here
+                        let sid = getSessionId();
+                        if (!sid) sid = await startNewSessionForUser(uid);
+                        if (!sid) return;
                         await fetch('/sessions/heartbeat', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -1330,7 +1326,10 @@
                     idleTimer = setTimeout(finalizeSessionForIdle, CLIENT_IDLE_MS);
                 }
 
+                let suppressAuto = false;
+                try { window.__SUPPRESS_AUTO_RESPONSES = false; } catch(_) {}
                 function requestResponseSafe() {
+                    if (suppressAuto) { queuedResponse = false; return; }
                     if (greetingInProgress) { queuedResponse = true; return; }
                     if (isResponseActive || responseRequested) { queuedResponse = true; return; }
                     const now = Date.now();
@@ -1362,11 +1361,21 @@
                     } catch (_) {}
                     // Immediately ask the model to continue speaking (without tools)
                     if (instructionsText && typeof instructionsText === 'string' && instructionsText.trim()) {
+                        debugLogInstructions('response.create', 'followup', instructionsText);
                         dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio', 'text'], instructions: instructionsText } }));
                     } else {
                         if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
                     }
                 }
+
+                // Personalization helpers: allow external script to suppress auto replies
+                try {
+                    window.setAutoResponseSuppressed = function(on){
+                        suppressAuto = !!on;
+                        window.__SUPPRESS_AUTO_RESPONSES = suppressAuto;
+                        if (suppressAuto) { queuedResponse = false; responseRequested = false; }
+                    };
+                } catch(_) {}
 
                 function ensureCodeAssistLauncher() {
                     let btn = document.getElementById('codeAssistLauncher');
@@ -1511,9 +1520,9 @@
                             console.error('Realtime error payload:', msg);
                             try { console.error('Realtime error JSON:', JSON.stringify(msg)); } catch (_) {}
                         }
-                        if (msg.type === 'response.created') { isResponseActive = true; responseRequested = false; } // UPDATED
+                        if (msg.type === 'response.created') { isResponseActive = true; responseRequested = false; try { window.__IS_RESPONSE_ACTIVE = true; } catch(_) {} } // UPDATED
                         if (msg.type === 'response.done') {
-                            isResponseActive = false;
+                            isResponseActive = false; try { window.__IS_RESPONSE_ACTIVE = false; } catch(_) {}
                             responseRequested = false;
                             resetIdleTimer();
                             // Do NOT clear awaitingLanguageChoice here; we wait for the user's answer first
@@ -1573,6 +1582,13 @@
                             try { if (awaitingLanguageChoice) awaitingLanguageChoice = false; } catch (_) {}
                             lastUserSpeechMs = Date.now();
                             resetIdleTimer();
+                            // If we were in personalization intro (auto-responses suppressed), release suppression on first user reply
+                            try {
+                                if (window.__PERSONALIZE_MODE === 'intro' && window.__SUPPRESS_AUTO_RESPONSES) {
+                                    window.setAutoResponseSuppressed && window.setAutoResponseSuppressed(false);
+                                    window.__PERSONALIZE_MODE = 'active';
+                                }
+                            } catch(_) {}
                             try {
                                 const uid = await getUserId();
                                 let sid = getSessionId(); if (!sid) sid = await startNewSessionForUser(uid);
@@ -1618,18 +1634,6 @@
                             if (name === 'set_walk' && window.AvatarController?.setWalk) { window.AvatarController.setWalk(); }
                             if (name === 'set_dance' && window.AvatarController?.setDance) { window.AvatarController.setDance(); }
                             if (name === 'set_fight' && window.AvatarController?.setFight) { window.AvatarController.setFight(); }
-
-                            if (name === 'get_user_context') {
-                                try {
-                                    maybeSendFiller();
-                                    const payload = await fetch('/user/context').then(r => r.json());
-                                    dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(payload) } }));
-                                } catch (e) {
-                                    dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'context_fetch_failed' }) } }));
-                                }
-                                if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
-                                return;
-                            }
 
                             if (name === 'get_event_quiz') {
                                 let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
@@ -1687,22 +1691,7 @@
                                 return;
                             }
 
-                            if (name === 'get_event_details') {
-                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
-                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
-                                try {
-                                    maybeSendFiller();
-                                    const payload = {};
-                                    if (args.event_id != null) payload.event_id = Number(args.event_id);
-                                    if (args.title != null) payload.title = String(args.title);
-                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_event_details', arguments: payload }) }).then(r=>r.json());
-                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
-                                    await beginNoToolFollowup();
-                                } catch (e) {
-                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'get_event_details_failed' }) } }));
-                                }
-                                return;
-                            }
+                            
 
                             if (name === 'list_courses') {
                                 let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
@@ -1722,33 +1711,31 @@
                                 return;
                             }
 
-                            if (name === 'recommend_courses') {
-                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
-                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
-                                try {
-                                    maybeSendFiller();
-                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'recommend_courses', arguments: args || {} }) }).then(r=>r.json());
-                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
-                                    const up = (out && Array.isArray(out.upcoming)) ? out.upcoming : [];
-                                    const past = (out && Array.isArray(out.recent_past)) ? out.recent_past : [];
-                                    // Let the model choose the single best course (based on title + summary_excerpt) regardless of time.
-                                    const instr = 'From the tool result, pick the SINGLE best course for the learner (use title + summary_excerpt). If it\'s past, say: “Oh — you just missed ‘{title}’ {starts_in_human}. You can still rewatch the recording and see the materials — want me to open its summary?” If it\'s upcoming, say: “Great timing — the best fit is ‘{title}’ on {date} at {time} ({tz}), {starts_in_human}. Want me to mark you as attending?” Then mention 1–2 upcoming items next (title + local date/time + starts_in_human). End with a clear yes/no (attend vs. open summary). Keep it natural, energetic, and brief.';
-                                    await beginNoToolFollowup(instr);
-                                } catch (e) {
-                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'recommend_courses_failed' }) } }));
-                                }
-                                return;
-                            }
+                            
 
-                            if (name === 'add_user_memory' || name === 'user_memory_add' || name === 'save_user_memory') {
+                            if (name === "add_user_memory" || name === "user_memory_add" || name === "save_user_memory") {
                                 let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
                                 let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
                                 try {
                                     maybeSendFiller();
                                     const payload = {};
-                                    if (args.type) payload.type = String(args.type);
-                                    if (args.statement) payload.statement = String(args.statement);
-                                    if (Array.isArray(args.items)) payload.items = args.items;
+                                    // Normalize fields and provide fallbacks
+                                    const coalesce = (...vals) => { for (const v of vals) { if (v!=null && String(v).trim()!=='') return String(v); } return undefined; };
+                                    // Type inference: accept 'type'|'category'|'kind'; default to 'preference'
+                                    const typeIn = coalesce(args.type, args.category, args.kind) || 'preference';
+                                    // Statement inference: accept 'statement'|'text'|'answer'|'value'|'content'; fallback to lastTranscript
+                                    const stmtIn = coalesce(args.statement, args.text, args.answer, args.value, args.content, (typeof lastTranscript==='string' ? lastTranscript : ''));
+                                    if (typeIn) payload.type = String(typeIn);
+                                    if (stmtIn) payload.statement = String(stmtIn);
+                                    // Items normalization: allow array<string> or array<{statement?,type?}>
+                                    if (Array.isArray(args.items)) {
+                                        payload.items = args.items.map(it => {
+                                            if (typeof it === 'string') return { type: typeIn || 'preference', statement: it };
+                                            const t = coalesce(it.type, it.category, it.kind) || typeIn || 'preference';
+                                            const s = coalesce(it.statement, it.text, it.value, it.answer, it.content);
+                                            return (s ? { type: t, statement: s } : null);
+                                        }).filter(Boolean);
+                                    }
                                     if (args.pinned != null) payload.pinned = !!args.pinned;
                                     if (args.stability != null) payload.stability = String(args.stability);
                                     const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'add_user_memory', arguments: payload }) }).then(r=>r.json());
@@ -1760,37 +1747,9 @@
                                 return;
                             }
 
-                            if (name === 'get_user_memory' || name === 'list_user_memory') {
-                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
-                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
-                                try {
-                                    maybeSendFiller();
-                                    const payload = {};
-                                    if (args.type) payload.type = String(args.type);
-                                    if (args.limit != null) payload.limit = Number(args.limit);
-                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'get_user_memory', arguments: payload }) }).then(r=>r.json());
-                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
-                                    await beginNoToolFollowup();
-                                    if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
-                                } catch (e) {
-                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'get_user_memory_failed' }) } }));
-                                }
-                                return;
-                            }
+                            
 
-                            if (name === 'user_favourite') {
-                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
-                                let args = {}; try { args = argStr ? JSON.parse(argStr) : (msg && msg.arguments ? (typeof msg.arguments==='string'? JSON.parse(msg.arguments):msg.arguments) : {});} catch(_) { args = {}; }
-                                try {
-                                    maybeSendFiller();
-                                    const out = await fetch('/tools/execute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:'user_favourite', arguments:{ event_id: Number(args.event_id) } }) }).then(r=>r.json());
-                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify(out) } }));
-                                    if (out && out.ok) { await beginNoToolFollowup('Added to your favorites. I can also mark you as attending or set a quick reminder — what would you like?'); return; }
-                                } catch (e) {
-                                    dc.send(JSON.stringify({ type:'conversation.item.create', item:{ type:'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'user_favourite_failed' }) } }));
-                                }
-                                return;
-                            }
+                            
 
                             if (name === 'enter_event') {
                                 let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
@@ -1914,35 +1873,7 @@
                                 return;
                             }
 
-                            if (name === 'fetch_chat_history') {
-                                let argStr = (callId && pendingArgs[callId]) ? pendingArgs[callId] : '';
-                                let args = {};
-                                try {
-                                    if (argStr && typeof argStr === 'string') {
-                                        args = JSON.parse(argStr);
-                                    } else if (msg && (msg.arguments != null)) {
-                                        args = (typeof msg.arguments === 'string') ? JSON.parse(msg.arguments) : msg.arguments;
-                                    }
-                                } catch (_) { args = {}; }
-                                try {
-                                    maybeSendFiller();
-                                    const resp = await fetch('/tools/execute', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ name: 'fetch_chat_history', arguments: args || {} })
-                                    }).then(r => r.json());
-                                    dc.send(JSON.stringify({
-                                        type: 'conversation.item.create',
-                                        item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(resp) }
-                                    }));
-                                } catch (e) {
-                                    dc.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ ok:false, error:'history_fetch_failed' }) } }));
-                                } finally {
-                                    if (callId) delete pendingArgs[callId];
-                                }
-                                if (!isResponseActive) { requestResponseSafe(); } else { queuedResponse = true; }
-                                return;
-                            }
+                            
 
                             if (name === 'read_agent_name') {
                                 try {
@@ -2118,65 +2049,21 @@
                 };
                 dc.addEventListener('message', toolHandler);
 
-                async function fetchUserContextForGreeting() {
-                    try {
-                        const userId = await getUserId();
-                        // Preferred language
-                        const lang = await fetch('/tools/execute', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name: 'read_preferred_language', arguments: { userId } })
-                        }).then(r => r.json()).catch(() => ({}));
-                        const preferredLanguage = (lang && lang.language) || null;
-                        // Display name from profile (if available)
-                        let userName = null;
-                        try {
-                            const prof = await fetch('/user/profile').then(r => r.json());
-                            userName = prof && prof.profile && prof.profile.name ? String(prof.profile.name) : null;
-                        } catch (_) {}
-                        return { preferredLanguage, userName };
-                    } catch (_) {
-                        return { preferredLanguage: null, userName: null };
-                    }
-                }
+                // removed ensureLanguageLock (language now enforced server-side)
+
+                // removed fetchUserContextForGreeting (no DB reads here)
+
+                // removed fetchPreferredLanguageFromSnapshot (language lock handled server-side)
 
                 // Fetch most recent user's message to use as a hard anchor for the first reply
-                async function fetchLastUserAnchor() {
-                    try {
-                        const resp = await fetch('/tools/execute', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name: 'fetch_chat_history', arguments: { sessions: 1 } })
-                        }).then(r => r.json()).catch(()=>null);
-                        if (!resp || !resp.sessions || !resp.sessions.length) return null;
-                        const s = resp.sessions[0];
-                        let arr = [];
-                        try { arr = Array.isArray(s.content) ? s.content : JSON.parse(s.content || '[]'); } catch(_) { arr = []; }
-                        if (!Array.isArray(arr) || !arr.length) return null;
-                        for (let i = arr.length - 1; i >= 0; i--) {
-                            const m = arr[i];
-                            const role = (m && m.role) ? String(m.role).toLowerCase() : '';
-                            if (role === 'user' || role === '' || role === 'human') {
-                                const text = (m && m.text != null) ? String(m.text) : String(m?.content || '');
-                                if (text && text.trim()) {
-                                    const when = (m && m.at_local) ? String(m.at_local) : null;
-                                    return { text: text.trim(), whenLocal: when };
-                                }
-                            }
-                        }
-                        return null;
-                    } catch (_) { return null; }
-                }
+                // removed fetchLastUserAnchor (we no longer query chat history via tools)
 
                 // [CA2.7] Greeting & onboarding helpers
                 (async () => {
                     greetingInProgress = true;
+                    // Only create a chat session after we know the DC is open
                     const uid = await getUserId();
-                    // Always start a fresh session on page load/login
-                    await startNewSessionForUser(uid);
-                    // STEP 1: retrieve user context first
-                    const ctx = await fetchUserContextForGreeting();
-                    // STEP 1b: fetch most recent user anchor (last user line)
-                    const anchor = await fetchLastUserAnchor();
-                    // STEP 2: if the user is brand-new (no history), auto-introduce; else wait for user
+                    if (uid) { await startNewSessionForUser(uid); }
                     const parts = [];
                     if (wasPostSettingsReload) {
                         const why = (postSettingsReloadWhy || '').toLowerCase();
@@ -2185,61 +2072,14 @@
                         initialGreetingSent = true;
                         responseRequested = true;
                         dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: parts.join(' ') } }));
-                    } else if (!hasHistory) {
-                        // FIRST SESSION ONLY: energetic greeting; ask language ONLY if not saved yet
-                        const greetLine = ctx.userName
-                            ? `OPEN ENERGETIC INTRO: Start with a energetic and motivational happy greeting, upbeat one‑liner that uses the learner’s name (e.g., “Hey ${ctx.userName}, nice to meet you!”). Immediately introduce yourself by name (e.g., “I’m Nova”), in the same line. Keep it friendly and motivating (≤1 sentence).`
-                            : 'OPEN ENERGETIC INTRO: Start with a energetic and motivational happy greeting, upbeat one‑liner and immediately introduce yourself by name (e.g., “I’m Nova”). Keep it friendly and motivating (≤1 sentence). If you do not know the name, you may ask it in one short sentence.';
-                        parts.push(greetLine);
-                        if (!ctx.preferredLanguage) {
-                            parts.push('Language choice (first line): Ask if they want to continue in English or switch languages (examples: Macedonian, Albanian, Serbian, Greek and explicitly say that you know many more). IMPORTANT: Ask ONLY this question now and WAIT for their answer before proceeding. Do not start onboarding until they answer.');
-                            try { awaitingLanguageChoice = true; } catch (_) {}
-                        } else {
-                            // Language already chosen previously; continue without asking again
-                            currentPreferredLanguage = ctx.preferredLanguage;
-                        }
-                        if (ctx.preferredLanguage) {
-                            parts.push('FIRST CONTACT (run onboarding): After the energetic self‑intro, explicitly say: “I’ll ask a few short questions to tailor your learning journey and help with real day‑to‑day tasks.” Then ask the first onboarding question: “What do you want to figure out with AI first?” Give 2–3 examples (e.g., “Automate repetitive tasks”, “Improve team performance”, “Learn AI from scratch”). After they answer, call add_user_memory with type:"goal" and the short statement, then ask the next onboarding question. Do not ask about hobbies or other smalltalk.');
-                        }
+                    } else {
+                        // Speak a neutral, assumption-free opener and ask ONE clarifying question.
+                        parts.push('SAFE CONTINUATION INTRO (NO ASSUMPTIONS): In 1–2 short sentences, greet warmly without referencing any prior topic, then ask a single clarifying question like “Want to pick up where we left off or start fresh?” Do NOT invent topics.');
                         initialGreetingSent = true;
                         responseRequested = true;
-                        dc.send(JSON.stringify({
-                            type: 'response.create',
-                            response: { modalities: ['audio','text'], instructions: parts.join(' ') }
-                        }));
-                    } else {
-                        // Returning user: strictly continue from the most recent excerpt; no generic re-introductions
-                        if (false && anchor && anchor.text) {
-                            parts.push('CONTINUATION INTRO: Begin with a brief, natural greeting (use the name if provided). In 2–3 short sentences: (1) optionally acknowledge timing (e.g., “you’re back fast”), and (2) continue directly from the user’s last message by referencing exactly ONE concrete detail. Do NOT invent topics, and do NOT mention personal routines/fitness unless present in the excerpt. Ask ONE focused question to move forward.');
-                            const tag = anchor.whenLocal ? ` [${anchor.whenLocal}]` : '';
-                            parts.push(`Continuation anchor (MANDATORY): Last user message${tag}: "${anchor.text}". Your first line MUST respond to THIS content; ignore any conflicting memory. Keep it concise.`);
-                            // Apply personalized voice if stored
-                            try {
-                                const uid = await getUserId();
-                                const s = await fetch('/tools/execute', {
-                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ name: 'read_agent_settings', arguments: { userId: uid } })
-                                }).then(r => r.json());
-                                if (s && s.voice && typeof s.voice === 'string') {
-                                    const v = s.voice.toLowerCase() === 'alloy' ? 'alloy' : (s.voice.toLowerCase() === 'cedar' ? 'cedar' : null);
-                                    if (v) dc.send(JSON.stringify({ type: 'session.update', session: { voice: v } }));
-                                }
-                            } catch (_) {}
-                            initialGreetingSent = true;
-                            responseRequested = true;
-                            await new Promise(r => setTimeout(r, 180));
-                            dc.send(JSON.stringify({
-                                type: 'response.create',
-                                response: { modalities: ['audio','text'], instructions: parts.join(' ') }
-                            }));
-                        } else {
-                            // No reliable anchor: speak a neutral, assumption-free opener and ask ONE clarifying question.
-                            parts.push('SAFE CONTINUATION INTRO (NO ASSUMPTIONS): In 1–2 short sentences, greet warmly without referencing any prior topic, then ask a single clarifying question like “Want to pick up where we left off or start fresh?” Do NOT invent topics.');
-                            initialGreetingSent = true;
-                            responseRequested = true;
-                            await new Promise(r => setTimeout(r, 120));
-                            dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: parts.join(' ') } }));
-                        }
+                        await new Promise(r => setTimeout(r, 120));
+                        debugLogInstructions('response.create', 'greeting.safe', parts.join(' '));
+                        dc.send(JSON.stringify({ type: 'response.create', response: { modalities: ['audio','text'], instructions: parts.join(' ') } }));
                     }
                     greetingInProgress = false;
                     // Small settle delay to avoid back-to-back response.create
@@ -2257,10 +2097,8 @@
         // ---- Section 3 START: Bootstrapping (DOMContentLoaded handlers)
         // [CA3.1] Startup sequence
         window.addEventListener('DOMContentLoaded', async () => {
-            startOpenAIRealtime();
-            // pre-create user + session for logging (avoid overwriting existing sessionId)
-            const uid = await (typeof getUserId === 'function' ? getUserId() : Promise.resolve(null));
-            if (uid && !getSessionId()) { await startNewSessionForUser(uid); }
+            // Defer session creation until the assistant starts to avoid referencing
+            // helpers that are defined inside startOpenAIRealtime().
             const btn = document.getElementById('logoutBtn');
             if (btn) {
                 // [CA3.2] Logout finalize & redirect
@@ -2281,6 +2119,33 @@
                     location.href = '/login';
                 });
             }
+            // Start assistant on-demand (no auto-connect)
+            (function setupStartAssistant(){
+                const sb = document.getElementById('startAssistantBtn');
+                if (!sb) return;
+                // Keep mic toggle disabled until session starts
+                try { const mb = document.getElementById('muteBtn'); if (mb) mb.disabled = true; } catch(_) {}
+                let started = false;
+                sb.addEventListener('click', async () => {
+                    if (started) return;
+                    started = true;
+                    const restore = () => { started = false; };
+                    const prev = sb.textContent;
+                    try {
+                        sb.disabled = true; sb.textContent = 'Connecting…';
+                        await startOpenAIRealtime();
+                        try { const a = document.getElementById('remoteAudio'); if (a) await a.play().catch(()=>{}); } catch(_) {}
+                        // hide once connected to avoid duplicate sessions
+                        sb.textContent = 'Connected';
+                        setTimeout(()=>{ try { sb.style.display='none'; } catch(_){} }, 400);
+                    } catch (e) {
+                        console.error('Failed to start assistant', e);
+                        sb.disabled = false; sb.textContent = prev || 'Talk to Assistant';
+                        restore();
+                    }
+                });
+            })();
+
             // Mute/unmute toggle
             // [CA3.3] Mute toggle wiring
             (function setupMuteToggle(){
@@ -2313,12 +2178,12 @@
             // [CA3.4] Background session summary on page exit
             let finalizationInProgress = false;
             let finalizationCompleted = false;
-            const summarizeAndSave = async () => {
+                const summarizeAndSave = async () => {
                 // Do not block page teardown; prefer fire-and-forget patterns
                 try {
                     if (finalizationCompleted || finalizationInProgress) return;
                     finalizationInProgress = true;
-                    const sessionId = getSessionId() || null; // do not create a new session here
+                    const sessionId = (function(){ try { return sessionStorage.getItem('chat_session_id'); } catch(_) { return null; } })() || null; // do not create a new session here
                     const payload = sessionId ? { sessionId, background: true } : { background: true };
                     let ok = false;
                     try {

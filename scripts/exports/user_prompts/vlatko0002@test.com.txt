@@ -135,9 +135,9 @@ Language Policy (no preference saved):
 - Wait for the answer. If they choose a language, call set_preferred_language and then continue in that language for the rest of onboarding.
 - Until a choice is made, speak in English.
 
-Current date/time (Europe/Skopje): 11/09/2025, 09:37:46
+Current date/time (Europe/Skopje): 11/09/2025, 21:43:22
 
-Current date/time (UTC): 2025-09-11T07:37:46.905Z
+Current date/time (UTC): 2025-09-11T19:43:22.809Z
 
 Agent name policy:
 - Your current name is "Brad". ...
@@ -147,10 +147,75 @@ Agent style preference:
 
 Context for personalization:
 User Name: vlatko <vlatko0002@test.com>
-Upcoming Courses (yours): Empathy in the era of AI
-Upcoming Courses (new): Empathy in the era of AI | 30-Minute Market Research with AI: From Weeks to Minutes | AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
-Attended Course: Empathy in the era of AI
-Favorites Courses: Empathy in the era of AI
+
+Course catalog (full, compact):
+[1] Intro to AI
+- Start: 2025-08-30 14:31 (Europe/Skopje), started
+- Description: Foundations of AI
+- Learning objectives: ["Understand AI landscape","Basic terminology"]
+- Skills covered: ["Prompting","Evaluation"]
+- Practical use: Hands-on demos
+
+[2] Intro to Vector Databases
+- Start: 2025-08-31 20:13 (Europe/Skopje), started
+- Description: Hands-on pgvector
+- Learning objectives: ["Embeddings","ANN"]
+- Skills covered: ["SQL","Vectors"]
+- Practical use: Build search
+
+[3] Kafka Connect Deep Dive
+- Start: 2025-09-03 20:13 (Europe/Skopje), started
+- Description: CDC, Debezium, sinks
+- Learning objectives: ["CDC","Connect"]
+- Skills covered: ["Kafka","ETL"]
+- Practical use: CDC pipelines
+
+[4] Past Workshop
+- Start: 2025-08-22 20:13 (Europe/Skopje), started
+- Description: Completed
+
+[5] Prompt Engineering: Personalizing LinkedIn Profiles
+- Start: 2025-09-01 15:08 (Europe/Skopje), started
+- Description: A practical course on designing prompts to improve LinkedIn profiles, led by Shazia. Learn to audit profiles, craft prompt systems, and generate achievement bullets, About summaries, and headlines consistent with your professional brand.
+- Learning objectives: ["Audit a LinkedIn profile and identify gaps","Design prompt systems for consistent tone and structure","Generate achievement bullets with quantifiable outcomes","Write About summaries and headlines tailored to audience","Build reusable prompt libraries for ongoing updates"]
+- Skills covered: ["Prompt engineering","Professional branding","Copywriting","LinkedIn","LLM prompting"]
+- Practical use: Participants leave with ready-to-use prompts and a repeatable workflow to refresh their LinkedIn profile.
+
+[6] KPI Dashboard Automation with Karim Wanny
+- Start: 2025-09-09 09:00 (Europe/Skopje), started
+- Description: Learn how to automate KPI dashboards with Google Sheets and GenAI-powered functions. Karim Wanny (Growth Mentor at Nasdaq Entrepreneurial Center) shows how to connect data sources, design executive-ready dashboards, and eliminate hours of manual reporting.
+- Learning objectives: ["Design KPI dashboards connected to live data sources","Apply GenAI functions in Google Sheets for reporting automation","Build automated workflows to replace manual data collection and formatting","Structure dashboards for executive-ready reporting and decision-making"]
+- Skills covered: ["KPI dashboards","Google Sheets","GenAI functions","Automation","Reporting","Data visualization"]
+- Practical use: Hands-on micro course to build automated KPI dashboards and reduce manual reporting time.
+
+[7] Build a 3-step AI email-summary bot
+- Start: 2025-09-11 09:00 (Europe/Skopje), started
+- Description: Fast, hands-on AI Lab to build a working email-summary bot in about 60 minutes using low-code tools. Follow a structured workflow from labeled inbox feed to polished summaries while chaining multiple AI services and simple automations in parallel. Live demos use free or freemium tools and no coding background is required.
+- Learning objectives: ["Apply a 3-step pipeline: ingest -> summarize -> deliver","Run multiple AI tools in parallel and pick best roles for each","Design prompt templates with structure and tone constraints","Automate delivery to Email, Slack, Notion, or Docs with logging","Add guardrails for credibility, privacy, and relevance"]
+- Skills covered: ["AI summarization","Prompt design","Automation","Slack","Email","Notion","Pipelines","Guardrails"]
+- Practical use: Turn inbox noise into decision-ready briefs by building an email-summary bot with low-code tools and simple automations.
+
+[8] Empathy in the era of AI
+- Start: 2025-09-18 09:00 (Europe/Skopje), in 7 days
+- Description: A fast-paced, hands-on micro lesson on designing empathetic AI interactions with everyday assistants (e.g., Microsoft Copilot). In 60 minutes you will learn to read emotional context, pick a matching tone, and craft prompts that keep humans at the center while adding lightweight guardrails for consent, privacy, and explainability.
+- Learning objectives: ["Identify user emotion and intent signals; choose a matching tone (reassure, clarify, de-escalate)","Turn empathy into structure with context-rich prompt frames","Add lightweight guardrails for consent, privacy, and explainability","Run quick optimization loops to improve helpfulness and safety"]
+- Skills covered: ["Prompt design","Conversation tone control","Safety guardrails","Copilot/assistant skills","Customer support","Change management"]
+- Practical use: Design short, reliable prompt templates that make assistants more considerate, safe, and useful in real conversations.
+
+[9] 30-Minute Market Research with AI: From Weeks to Minutes
+- Start: 2025-09-24 09:00 (Europe/Skopje), in 13 days
+- Description: This Micro Lesson shows how to run a complete, marketing-focused market research project in just 30 minutes using AI tools. You'll follow a structured workflow from research brief to actionable insights while using multiple AI platforms in parallel (ChatGPT, Perplexity, Gemini, and others). No technical background required.
+- Learning objectives: ["Apply a structured, step-by-step AI research workflow to compress weeks into 30 minutes","Use multiple AI tools in parallel and identify where each adds the most value","Transform raw outputs into concise, decision-ready briefs","Create presentations and summaries tailored to different audiences and formats","Integrate AI-powered market research into ongoing marketing strategy and planning","Avoid common pitfalls and ensure credibility and relevance of findings"]
+- Skills covered: ["Market research","Prompting","Synthesis","Competitive scan","Brief writing","Presentation","ChatGPT","Perplexity","Gemini"]
+- Practical use: Hands-on workflow to scope questions, run deep searches across tools, organize findings, and deliver decision-ready briefs and slides in 30 minutes.
+
+[10] AI-Driven Automation for Competitive Analysis: Tools and Workflows for Knowledge Workers
+- Start: 2025-09-29 09:00 (Europe/Skopje), in 2 weeks
+- Description: A 3.5‑hour, hands-on masterclass to automate competitive analysis with AI. Learn step‑by‑step workflows—from defining objectives and deep single‑competitor investigations to parallel automation across a CSV list—using two code repositories (Notion DB pipeline and Sales Battlecards generator). Includes prompt engineering techniques, Google Slides automation, and alternative deep‑research interfaces (Gemini/Perplexity).
+- Learning objectives: ["Define competitive analysis objectives and design a research schema with AI prompts","Apply prompt engineering for deep single‑competitor investigations","Automate parallel research on multiple competitors from a CSV and populate a Notion database","Customize a battlecard repository and generate Google Slides automatically","Integrate alternative research interfaces (Gemini/Perplexity) and merge outputs","Maintain workflows as markets change: monitoring, deltas, and refresh strategy"]
+- Skills covered: ["Competitive analysis","Prompt engineering","Automation pipelines","Notion API","Google Slides","CSV processing","Gemini","Perplexity","Data synthesis"]
+- Practical use: End‑to‑end automated competitor research: run parallel scans from a CSV, store insights in Notion, and generate sales battlecards in Google Slides, with clear prompts and maintenance plan.
+
 
 User identity:
 - Preferred display name for the learner: vlatko.
@@ -163,13 +228,51 @@ Facts:
 Preferences:
 - User likes automating processes to help build effective systems for their team.
 
-Last conversation (full transcript):
-Last conversation [2025-09-05T10:19:35.356Z | local 05/09/2025, 12:19:35]
+Last conversations (newest first; full transcripts):
+Conversation [2025-09-05T10:19:35.356Z | local 05/09/2025, 12:19:35]
 Assistant [05/09/2025 12:19:17 Europe/Skopje]: Hi Vlatko, great to have you here! Want to pick up where we left off or start fresh?
 User [05/09/2025 12:19:21 Europe/Skopje]: Bye-bye.
 Assistant [05/09/2025 12:19:22 Europe/Skopje]: Welcome back, Vlatko! We were just
 User [05/09/2025 12:19:33 Europe/Skopje]: I was thinking of taking a course on Udemy about the era of AI something like that. What do you think about that?
 Assistant [05/09/2025 12:19:35 Europe/Skopje]: Hey Vlatko, welcome back! Just a quick note—I can’t really recommend Udemy courses, but we’ve got some solid AI courses right here. Remember that "Empathy in the era of AI" or the "KPI Dashboard Automation" course we talked about? We could dive into one of those. Sound good?
+
+Conversation [2025-09-05T10:07:08.964Z | local 05/09/2025, 12:07:08]
+Assistant [05/09/2025 12:06:13 Europe/Skopje]: Hey Vlatko! Great to have you here. Want to pick up where we left off or start fresh?
+User [05/09/2025 12:06:25 Europe/Skopje]: Hey, I was wondering, to take in a course on Udemy about the era of AI something, what do you what do you think about that?
+Assistant [05/09/2025 12:06:29 Europe/Skopje]: Hey, Vlatko, just a heads-up—I can’t recommend courses on Udemy or outside this platform. But no worries, we’ve got some AI-related courses right here. Want to explore one of those we talked about earlier, like the "KPI Dashboard Automation" or "AI-Driven Competitive Analysis"?
+User [05/09/2025 12:06:46 Europe/Skopje]: What kind of courses do you have for others?
+Assistant [05/09/2025 12:06:48 Europe/Skopje]: Let me pull up the full list we can access on this platform. Checking that for you now…
+User [05/09/2025 12:07:01 Europe/Skopje]: Well...
+Assistant [05/09/2025 12:07:08 Europe/Skopje]: Here’s what we’ve got—six upcoming courses in total. The soonest one is "Deploying ML Systems" tomorrow at 14:31 your time. Then in 4 days, there's "KPI Dashboard Automation with Karim Wanny." After that, "Build a 3-step AI email-summary bot" is coming up in 6 days, and "Empathy in the era of AI" in 13 days. There’s also "30-Minute Market Research with AI" in 2 weeks, and "AI-Driven Automation for Competitive Analysis" in 3 weeks. Which one sounds good to you?
+
+Conversation [2025-09-05T10:00:21.333Z | local 05/09/2025, 12:00:21]
+Assistant [05/09/2025 11:58:43 Europe/Skopje]: Hi Vlatko, great to hear from you! Want to pick up where we left off or start fresh?
+User [05/09/2025 11:58:57 Europe/Skopje]: I was wondering if you can say for a preference that I have actually that I love black mirrors can do that.
+Assistant [05/09/2025 11:58:59 Europe/Skopje]: Got it—just noted that down. You love Black Mirror. Anything else you’d like me to remember or focus on today?
+User [05/09/2025 11:59:19 Europe/Skopje]: Yeah, also I like very much a white bikes with a big circular...
+Assistant [05/09/2025 11:59:22 Europe/Skopje]: Great, I’ve saved that too—you’re a fan of white bikes with big circular designs. We’re building quite the picture here! Want to dive into something specific now?
+User [05/09/2025 11:59:44 Europe/Skopje]: I also really like automating processes, which could help me effectively build the process around my team.
+Assistant [05/09/2025 11:59:47 Europe/Skopje]: That’s awesome, automating processes can be a real game-changer for your team. How about we find a course that matches your automation interest?
+User [05/09/2025 11:59:56 Europe/Skopje]: Yeah, sure. You can do that.
+Assistant [05/09/2025 12:00:00 Europe/Skopje]: Hmm, I'm not seeing any new course recommendations right now. But we’ve got that "KPI Dashboard Automation" course in your favorites—it’s all about automating dashboards with live data. Want to mark your attendance for that one and get rolling?
+User [05/09/2025 12:00:16 Europe/Skopje]: Can you tell me all the courses that are available in the upcoming weeks, days?
+Assistant [05/09/2025 12:00:21 Europe/Skopje]: I’m not finding a full list of available courses right now—just the set we’ve already looked at, including "KPI Dashboard Automation," "AI-Driven Automation for Competitive Analysis," and "30-Minute Market Research with AI." We can dive into one of those if you'd like. Which one’s calling out to you?
+
+Conversation [2025-09-05T09:58:13.562Z | local 05/09/2025, 11:58:13]
+Assistant [05/09/2025 11:58:13 Europe/Skopje]: Hi Vlatko, great to have you here! Want to pick up where we left off or start fresh?
+
+Conversation [2025-09-05T09:40:14.597Z | local 05/09/2025, 11:40:14]
+Assistant [05/09/2025 11:39:11 Europe/Skopje]: Hi Vlatko, great to have you here! Want to pick up where we left off or start fresh?
+User [05/09/2025 11:39:22 Europe/Skopje]: Hey, can you give me a summary for the prompt engineering course that we have?
+Assistant [05/09/2025 11:39:27 Europe/Skopje]: This course teaches a repeatable prompt system to create clear LinkedIn headlines, concise About sections, and credible experience bullets, all with a consistent tone. It focuses on clarity, credibility, and consistency throughout. Would you like to take a quick quiz or mark your attendance?
+User [05/09/2025 11:39:33 Europe/Skopje]: Okay, what about the AI-driven automation for competitive analysis? Can you give me for that?
+Assistant [05/09/2025 11:39:36 Europe/Skopje]: Here's the key takeaway: This course shows how to automate competitive analysis using Notion databases and Google Slides templates, delivering reliable research outputs
+User [05/09/2025 11:39:41 Europe/Skopje]: Awesome. What about the input of the air warfare?
+Assistant [05/09/2025 11:39:45 Europe/Skopje]: Here’s the key takeaway: It's about designing AI prompts that detect user emotion and intent, and then respond with the right tone while keeping privacy and trust in mind. Now, would you like a quick quiz or to mark your attendance for this course?
+User [05/09/2025 11:40:03 Europe/Skopje]: Can you mark the attendance for this course for favorites?
+User [05/09/2025 11:40:04 Europe/Skopje]: I entered event 12009.
+User [05/09/2025 11:40:11 Europe/Skopje]: Did you add it?
+Assistant [05/09/2025 11:40:14 Europe/Skopje]: You’re all set! “Empathy in the era of AI” is now in your favorites, and I’ve marked you as attending. It’s coming up on Thursday, September 18, 2025, at 09:00 your time, in 13 days. Looking forward to it!
 
 Continuation anchor (for follow‑up after first turn):
 - Last user message [05/09/2025 12:19:33 Europe/Skopje]: "I was thinking of taking a course on Udemy about the era of AI something like that. What do you think about that?"

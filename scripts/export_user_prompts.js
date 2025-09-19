@@ -163,113 +163,115 @@ function fmtLocal(d) {
   } catch { return d.toISOString(); }
 }
 
-// Copy of server.js → composeUserContextSummary (kept concise)
+// -------------------------------------------------------------------------------------
+// Courses catalog (reads events_mysql_mirror and formats a compact full list)
+// -------------------------------------------------------------------------------------
+async function buildCoursesCatalogBlock() {
+  try {
+    // Discover available columns
+    const colsRes = await query(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='events_mysql_mirror'`
+    );
+    const cols = new Set((colsRes.rows || []).map(r => r.column_name));
+    const selectCols = ['id'];
+    const titleCol = cols.has('title') ? 'title' : (cols.has('name') ? 'name' : null);
+    if (titleCol) selectCols.push(titleCol);
+    const descCol = cols.has('description') ? 'description' : null;
+    const loCol = cols.has('learning_objectives') ? 'learning_objectives' : null;
+    const skillsCol = cols.has('skills_covered') ? 'skills_covered' : null;
+    const practicalCol = cols.has('practical_use') ? 'practical_use' : null;
+    if (descCol) selectCols.push(descCol);
+    if (loCol) selectCols.push(loCol);
+    if (skillsCol) selectCols.push(skillsCol);
+    if (practicalCol) selectCols.push(practicalCol);
+    const maybeCols = ['start_at','starts_at','start_datetime','event_start','datetime','scheduled_at','event_date','start_date','date','start_time','time'];
+    const present = maybeCols.filter(c => cols.has(c));
+    selectCols.push(...present);
+
+    const ev = await query(`SELECT ${selectCols.join(', ')} FROM events_mysql_mirror`);
+    const now = new Date();
+    function computeRelative(start) {
+      if (!start) return 'unknown';
+      const diffMs = start.getTime() - now.getTime();
+      if (diffMs <= 0) return 'started';
+      const days = Math.ceil(diffMs / (24*3600*1000));
+      if (days < 1) {
+        const hrs = Math.max(1, Math.round(diffMs / (3600*1000)));
+        return `in ${hrs} hour${hrs===1?'':'s'}`;
+      }
+      if (days < 14) return `in ${days} day${days===1?'':'s'}`;
+      const weeks = Math.floor(days / 7);
+      return `in ${weeks} week${weeks===1?'':'s'}`;
+    }
+
+    function firstVal(row, keys) {
+      for (const k of keys) { if (k && row[k] != null) return String(row[k]); }
+      return null;
+    }
+    function trimText(s, max = 600) { if (!s) return null; const t = String(s).trim(); return t.length > max ? t.slice(0, max - 3) + '...' : t; }
+
+    const lines = [];
+    let idx = 1;
+    for (const row of (ev.rows || [])) {
+      const title = titleCol ? (row[titleCol] || `Course ${row.id || ''}`) : (row.title || row.name || `Course ${row.id || ''}`);
+      const description = descCol ? (row[descCol] ?? null) : null;
+      const learning_objectives = loCol ? (row[loCol] ?? null) : null;
+      const skills_covered = skillsCol ? (row[skillsCol] ?? null) : null;
+      const practical_use = practicalCol ? (row[practicalCol] ?? null) : null;
+
+      // Attempt to derive a start date
+      const datePart = firstVal(row, ['event_date','start_date','date']);
+      const timePart = firstVal(row, ['start_time','time']);
+      const directTs = firstVal(row, ['start_at','starts_at','start_datetime','event_start','datetime','scheduled_at']);
+      let start = null;
+      if (directTs) { const d = new Date(directTs); if (!isNaN(d)) start = d; }
+      else if (datePart && timePart) { const d = new Date(`${datePart} ${timePart}`); if (!isNaN(d)) start = d; }
+      else if (datePart) { const d = new Date(`${datePart}T00:00:00`); if (!isNaN(d)) start = d; }
+
+      let start_date_local = null, start_time_local = null;
+      try {
+        if (start) {
+          start_date_local = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit' }).format(start);
+          start_time_local = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour:'2-digit', minute:'2-digit' }).format(start);
+        }
+      } catch (_) {}
+
+      lines.push(`[${idx++}] ${title}`);
+      if (start) lines.push(`- Start: ${start_date_local} ${start_time_local} (${TZ}), ${computeRelative(start)}`);
+      if (description) lines.push(`- Description: ${trimText(description, 600)}`);
+      if (learning_objectives) lines.push(`- Learning objectives: ${trimText(learning_objectives, 500)}`);
+      if (skills_covered) lines.push(`- Skills covered: ${trimText(skills_covered, 400)}`);
+      if (practical_use) lines.push(`- Practical use: ${trimText(practical_use, 400)}`);
+      lines.push('');
+    }
+    return lines.join('\n');
+  } catch (_) {
+    return '';
+  }
+}
+
+// Compose a minimal user context summary (no events_mysql_mirror reads here)
 async function composeUserContextSummary(email, pgUserId) {
   try {
     if (!email) return '';
-    const userRes = await query(`SELECT id, name, email FROM user_mysql_mirror WHERE email = $1 LIMIT 1`, [email]);
-    const u = userRes?.rows?.[0];
-    if (!u) return '';
-    const uid = u.id;
-
+    // Basic identity from mirror (no events joins)
+    const userRes = await query(`SELECT name, email FROM user_mysql_mirror WHERE email = $1 LIMIT 1`, [email]);
+    const u = userRes?.rows?.[0] || { name: null, email };
+    // Preferred language
     let preferredLang = null;
     try {
       if (pgUserId) {
         const lang = await query(`SELECT preferred_language FROM user_language WHERE user_id = $1`, [pgUserId]);
         preferredLang = lang?.rows?.[0]?.preferred_language || null;
       }
-    } catch {}
-
-    const [cats, upcomingMine, attended, attempts, favs, webinarSample, upcomingAll] = await Promise.all([
-      query(
-        `SELECT c.title, COUNT(*) AS n
-           FROM categories_mysql_mirror c
-           JOIN events_mysql_mirror e ON e.category_id = c.id
-           JOIN event_attendances_mysql_mirror a ON a.event_id = e.id
-          WHERE a.user_id = $1
-          GROUP BY c.title
-          ORDER BY n DESC, c.title ASC
-          LIMIT 5`,
-        [uid]
-      ),
-      query(
-        `SELECT e.title, e.start_at
-           FROM events_mysql_mirror e
-           LEFT JOIN event_user_favorites_mysql_mirror f ON f.event_id = e.id AND f.user_id = $1
-           LEFT JOIN event_attendances_mysql_mirror a ON a.event_id = e.id AND a.user_id = $1
-          WHERE e.start_at > now() AND (f.user_id IS NOT NULL OR a.user_id IS NOT NULL)
-          ORDER BY e.start_at ASC
-          LIMIT 5`,
-        [uid]
-      ),
-      query(
-        `SELECT e.title
-           FROM event_attendances_mysql_mirror a
-           JOIN events_mysql_mirror e ON e.id = a.event_id
-          WHERE a.user_id = $1
-          ORDER BY COALESCE(a.left_at, a.joined_at) DESC
-          LIMIT 5`,
-        [uid]
-      ),
-      query(
-        `SELECT event_quiz_id, score_percentage, passed
-           FROM event_quiz_attempts_mysql_mirror
-          WHERE user_id = $1
-          ORDER BY started_at DESC
-          LIMIT 5`,
-        [uid]
-      ),
-      query(
-        `SELECT e.title
-           FROM event_user_favorites_mysql_mirror f
-           JOIN events_mysql_mirror e ON e.id = f.event_id
-          WHERE f.user_id = $1
-          ORDER BY f.created_at DESC
-          LIMIT 5`,
-        [uid]
-      ),
-      query(
-        `SELECT q.question
-           FROM event_webinar_questions_mysql_mirror q
-          WHERE q.event_id IN (
-            SELECT event_id FROM event_attendances_mysql_mirror WHERE user_id = $1
-          )
-          ORDER BY q.created_at DESC
-          LIMIT 5`,
-        [uid]
-      ),
-      query(
-        `SELECT title, start_at
-           FROM events_mysql_mirror
-          WHERE start_at > now() AND COALESCE(is_public,1)=1
-          ORDER BY start_at ASC
-          LIMIT 5`
-      )
-    ]);
-
-    const categories = (cats?.rows || []).map(r => r.title).filter(Boolean);
-    const upcomingMineStr = (upcomingMine?.rows || []).map(r => `${r.title}`).join(' | ');
-    const upcomingAllStr = (upcomingAll?.rows || []).map(r => `${r.title}`).join(' | ');
-    const attendedStr = (attended?.rows || []).map(r => r.title).join(' | ');
-    const quizzesStr = (attempts?.rows || []).map(a => `${a.event_quiz_id}:${a.score_percentage}%${a.passed ? '✓' : '✗'}`).join(' | ');
-    const favsStr = (favs?.rows || []).map(r => r.title).join(' | ');
-    const webinarSampleStr = (webinarSample?.rows || []).map(r => r.question).join(' | ');
-
+    } catch (_) {}
     const parts = [];
     parts.push(`User Name: ${u.name || ''} <${u.email || ''}>`);
     if (preferredLang) parts.push(`Preferred language: ${preferredLang}`);
-    if (categories.length) parts.push(`Categories: ${categories.join(', ')}`);
-    if (upcomingMineStr) parts.push(`Upcoming Courses (yours): ${upcomingMineStr}`);
-    if (upcomingAllStr) parts.push(`Upcoming Courses (new): ${upcomingAllStr}`);
-    if (attendedStr) parts.push(`Attended Course: ${attendedStr}`);
-    if (favsStr) parts.push(`Favorites Courses: ${favsStr}`);
-    if (quizzesStr) parts.push(`Quizzes (recent): ${quizzesStr}`);
-    if (webinarSampleStr) parts.push(`Webinar Qs (recent): ${webinarSampleStr}`);
-    let out = parts.join('\n');
-    const MAX = 1200;
-    if (out.length > MAX) out = out.slice(0, MAX - 3) + '...';
-    return out;
-  } catch {
+    // Intentionally omit any queries to events_mysql_mirror to avoid duplication; the full catalog
+    // and event-driven context should be built inside buildCoursesCatalogBlock() only.
+    return parts.join('\n');
+  } catch (_) {
     return '';
   }
 }
@@ -351,7 +353,7 @@ async function buildInstructionsForUser({ email, userId }) {
     }
   } catch {}
 
-  // Last conversation (full transcript) + anchor
+  // Last conversations (3–5 full transcripts) + anchor
   let recentConvosBlock = '';
   let lastConversationUpdatedAt = null;
   let userDisplayName = null;
@@ -368,47 +370,52 @@ async function buildInstructionsForUser({ email, userId }) {
   }
 
   try {
-    // Exporter behavior: include ONLY the most recent session and include ALL turns
+    // Include the last up to 5 conversations (newest first), each rendered fully
     const rows = await query(
       `SELECT content, updated_at
          FROM chat_message
         WHERE user_id = $1
         ORDER BY updated_at DESC
-        LIMIT 1`,
+        LIMIT 5`,
       [userId]
     );
     if (rows?.rows?.length) {
-      const r = rows.rows[0];
-      const updated = r.updated_at ? new Date(r.updated_at) : null;
-      lastConversationUpdatedAt = updated;
-      let arr = [];
-      try { arr = Array.isArray(r.content) ? r.content : JSON.parse(r.content || '[]'); } catch { arr = []; }
-      // Compute anchor from the last USER message
-      if (Array.isArray(arr) && arr.length) {
-        for (let j = arr.length - 1; j >= 0; j--) {
-          const m = arr[j];
-          if (m && (m.role === 'user' || m.role === 'User')) {
-            anchorText = (m.text != null ? String(m.text) : String(m?.content || '')).trim();
-            if (m && typeof m.at_local === 'string' && m.at_local.trim()) {
-              anchorWhenLocal = `${m.at_local} ${TZ}`;
+      const convBlocks = [];
+      const newest = rows.rows[0];
+      lastConversationUpdatedAt = newest.updated_at ? new Date(newest.updated_at) : null;
+      // Compute anchor from newest conversation's last USER message
+      try {
+        let a = [];
+        try { a = Array.isArray(newest.content) ? newest.content : JSON.parse(newest.content || '[]'); } catch { a = []; }
+        if (Array.isArray(a) && a.length) {
+          for (let j = a.length - 1; j >= 0; j--) {
+            const m = a[j];
+            if (m && (m.role === 'user' || m.role === 'User')) {
+              anchorText = (m.text != null ? String(m.text) : String(m?.content || '')).trim();
+              if (m && typeof m.at_local === 'string' && m.at_local.trim()) {
+                anchorWhenLocal = `${m.at_local} ${TZ}`;
+              }
+              break;
             }
-            break;
           }
         }
+      } catch {}
+      for (const r of rows.rows) {
+        const updated = r.updated_at ? new Date(r.updated_at) : null;
+        let arr = [];
+        try { arr = Array.isArray(r.content) ? r.content : JSON.parse(r.content || '[]'); } catch { arr = []; }
+        const lines = (Array.isArray(arr) ? arr : []).map(m => {
+          const role = (m && m.role === 'model') ? 'Assistant' : 'User';
+          const text = (m && m.text != null) ? String(m.text) : String(m?.content || '');
+          let whenLocal = null;
+          if (m && typeof m.at_local === 'string' && m.at_local.trim()) whenLocal = `${m.at_local} ${TZ}`;
+          const prefix = whenLocal ? `${role} [${whenLocal}]` : role;
+          return `${prefix}: ${text.trim()}`;
+        });
+        const header = updated ? `Conversation [${updated.toISOString()} | local ${fmtLocal(updated)}]` : `Conversation`;
+        convBlocks.push(`${header}\n${lines.join('\n')}`);
       }
-      // Render full transcript for the last conversation
-      const lines = (Array.isArray(arr) ? arr : []).map(m => {
-        const role = (m && m.role === 'model') ? 'Assistant' : 'User';
-        const text = (m && m.text != null) ? String(m.text) : String(m?.content || '');
-        let whenLocal = null;
-        if (m && typeof m.at_local === 'string' && m.at_local.trim()) {
-          whenLocal = `${m.at_local} ${TZ}`;
-        }
-        const prefix = whenLocal ? `${role} [${whenLocal}]` : role;
-        return `${prefix}: ${text.trim()}`;
-      });
-      const header = updated ? `Last conversation [${updated.toISOString()} | local ${fmtLocal(updated)}]` : `Last conversation`;
-      recentConvosBlock = `${header}\n${lines.join('\n')}`;
+      recentConvosBlock = convBlocks.join('\n\n');
     }
   } catch {}
 
@@ -436,10 +443,17 @@ async function buildInstructionsForUser({ email, userId }) {
   if (agentStyle) insParts.push(`Agent style preference:\n- Maintain this baseline style across turns: ${agentStyle}. ...`);
   const contextSummary = await composeUserContextSummary(email, userId);
   if (contextSummary) insParts.push(`Context for personalization:\n${contextSummary}`);
+  // Append a compact full catalog so the assistant has course details without extra DB calls
+  try {
+    const catalog = await buildCoursesCatalogBlock();
+    if (catalog && catalog.trim()) {
+      insParts.push(`Course catalog (full, compact):\n${catalog}`);
+    }
+  } catch (_) {}
   if (email) insParts.push(`User identity:\n- Preferred display name for the learner: ${userDisplayName || email.split('@')[0]}.`);
   if (hasHistory && recentSummariesBlock) insParts.push(`Recent session summaries (NEWEST FIRST; prefer newest on conflict):\n${recentSummariesBlock}`);
   if (hasHistory && workingPack) insParts.push(`Working Memory Pack (use naturally; do not restate verbatim):\n${workingPack}`);
-  if (hasHistory && recentConvosBlock) insParts.push(`Last conversation (full transcript):\n${recentConvosBlock}`);
+  if (hasHistory && recentConvosBlock) insParts.push(`Last conversations (newest first; full transcripts):\n${recentConvosBlock}`);
   if (anchorText) {
     insParts.push(`Continuation anchor (for follow‑up after first turn):\n- Last user message ${anchorWhenLocal ? `[${anchorWhenLocal}]` : ''}: "${anchorText}"`);
   }
